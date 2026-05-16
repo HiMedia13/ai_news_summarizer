@@ -80,18 +80,28 @@ def ensure_dataset(client: Client) -> str:
 
 
 def run_agent(inputs: dict) -> dict:
-    """평가 대상 함수: agent 실행 → 답변 + 사용 도구 추출."""
+    """평가 대상 함수: agent 실행 → 답변 + 사용 도구 + 검색 컨텍스트 추출."""
     result = react_agent.invoke(
         {"messages": [("user", inputs["q"])]},
         config={"recursion_limit": 25},
     )
     tools_used = []
+    retrieval_chunks = []
     for m in result["messages"]:
         if getattr(m, "type", "") == "ai":
             for tc in getattr(m, "tool_calls", None) or []:
                 tools_used.append(tc.get("name", ""))
+        elif getattr(m, "type", "") == "tool":
+            # search_news 출력만 retrieval context로 취급
+            if getattr(m, "name", "") == "search_news":
+                content = m.content if isinstance(m.content, str) else str(m.content)
+                retrieval_chunks.append(content)
     final = result["messages"][-1]
-    return {"answer": final.content, "tools_used": tools_used}
+    return {
+        "answer": final.content,
+        "tools_used": tools_used,
+        "retrieval": "\n\n".join(retrieval_chunks),
+    }
 
 
 JUDGE_MODEL = "gpt-4o"
@@ -153,6 +163,78 @@ def count_match(outputs: dict, reference_outputs: dict) -> dict:
             "comment": f"rate_article {rate_calls}회 (기대 {expected_count})"}
 
 
+def _judge_json(prompt: str, key: str) -> dict:
+    """공통 헬퍼: judge LLM에 prompt 보내고 JSON {score, reason} 파싱."""
+    resp = judge_llm.invoke(prompt)
+    text = resp.content if isinstance(resp.content, str) else str(resp.content)
+    try:
+        m = re.search(r"\{.*?\}", text, re.DOTALL)
+        data = json.loads(m.group(0))
+        score = float(data.get("score", 0))
+        score = max(0.0, min(1.0, score))
+        return {"key": key, "score": score, "comment": data.get("reason", "")}
+    except Exception as e:
+        return {"key": key, "score": 0.0,
+                "comment": f"(judge 파싱 실패: {e}) 원문: {text[:200]}"}
+
+
+def faithfulness(outputs: dict, inputs: dict) -> dict:
+    """답변이 retrieval context에 충실한가 (환각 없는가) — 0~1 점수."""
+    retrieval = outputs.get("retrieval", "")
+    answer = outputs.get("answer", "")
+    if not retrieval.strip():
+        return {"key": "faithfulness", "score": 0.0,
+                "comment": "retrieval context 없음 (search_news 미호출)"}
+    prompt = (
+        "당신은 RAG 환각 검사관입니다. 답변의 모든 주장이 검색 컨텍스트로 뒷받침되는지 평가하세요.\n\n"
+        f"[검색 컨텍스트]\n{retrieval[:4000]}\n\n"
+        f"[답변]\n{answer}\n\n"
+        "평가 기준:\n"
+        "- 답변에 등장하는 사실/주장이 컨텍스트로부터 직접 추론 가능한가?\n"
+        "- 컨텍스트에 없는 내용을 답변이 추가했는가? (환각)\n"
+        "- 1.0=모든 주장 충실, 0.5=절반 환각, 0.0=대부분 환각/근거 없음\n\n"
+        '응답은 JSON만: {"score": 0.0~1.0 실수, "reason": "한 줄 평가"}'
+    )
+    return _judge_json(prompt, "faithfulness")
+
+
+def answer_relevancy(outputs: dict, inputs: dict) -> dict:
+    """답변이 사용자 질문에 직접 부합하는가 — 0~1 점수."""
+    question = inputs.get("q", "")
+    answer = outputs.get("answer", "")
+    prompt = (
+        "당신은 답변 관련성 검사관입니다. 답변이 질문에 직접 답하고 있는지 평가하세요.\n\n"
+        f"[질문]\n{question}\n\n"
+        f"[답변]\n{answer}\n\n"
+        "평가 기준:\n"
+        "- 답변이 질문의 의도(요청 형식·범위·개수)에 직접 부합하는가?\n"
+        "- 동문서답이거나 회피·우회 답변은 아닌가?\n"
+        "- 1.0=완전 부합, 0.5=부분 부합, 0.0=무관/회피\n\n"
+        '응답은 JSON만: {"score": 0.0~1.0 실수, "reason": "한 줄 평가"}'
+    )
+    return _judge_json(prompt, "answer_relevancy")
+
+
+def contextual_relevancy(outputs: dict, inputs: dict) -> dict:
+    """검색 결과(retrieval)가 질문과 관련 있는가 — retriever 자체 품질."""
+    question = inputs.get("q", "")
+    retrieval = outputs.get("retrieval", "")
+    if not retrieval.strip():
+        return {"key": "contextual_relevancy", "score": 0.0,
+                "comment": "retrieval context 없음"}
+    prompt = (
+        "당신은 검색 품질 평가관입니다. 검색된 기사들이 질문과 관련 있는지 평가하세요.\n\n"
+        f"[질문]\n{question}\n\n"
+        f"[검색 결과]\n{retrieval[:4000]}\n\n"
+        "평가 기준:\n"
+        "- 검색된 기사들이 질문의 주제·키워드와 관련 있는가?\n"
+        "- 무관한 기사가 섞여 있는 비율이 얼마나 되는가?\n"
+        "- 1.0=모두 관련, 0.5=절반만 관련, 0.0=대부분 무관\n\n"
+        '응답은 JSON만: {"score": 0.0~1.0 실수, "reason": "한 줄 평가"}'
+    )
+    return _judge_json(prompt, "contextual_relevancy")
+
+
 def main():
     client = Client()
     dataset_name = ensure_dataset(client)
@@ -161,24 +243,62 @@ def main():
     results = evaluate(
         run_agent,
         data=dataset_name,
-        evaluators=[quality_judge, tool_coverage, count_match],
+        evaluators=[
+            quality_judge, tool_coverage, count_match,
+            faithfulness, answer_relevancy, contextual_relevancy,
+        ],
         experiment_prefix=f"react-agent-judge-{JUDGE_MODEL}",
         max_concurrency=2,
     )
 
     print("\n========== 평가 요약 ==========")
     rows = list(results)
+    metric_keys = ("quality", "tool_coverage", "count_match",
+                   "faithfulness", "answer_relevancy", "contextual_relevancy")
+    # 평균 누적용
+    sums = {k: 0.0 for k in metric_keys}
+    counts = {k: 0 for k in metric_keys}
+
+    # 마크다운 리포트 생성
+    report_lines = ["# 에이전트 평가 결과", "", f"Judge 모델: `{JUDGE_MODEL}`",
+                    f"평가 대상: ReAct 에이전트 (gpt-4o-mini)",
+                    f"데이터셋: `{dataset_name}` ({len(rows)}개 예시)", ""]
+
     for r in rows:
         ex = r["example"]
         run = r["run"]
         evals = {e.key: e for e in r["evaluation_results"]["results"]}
-        print(f"\nQ: {ex.inputs['q'][:60]}")
+        q = ex.inputs["q"]
         used = (run.outputs or {}).get("tools_used", [])
+        print(f"\nQ: {q[:60]}")
         print(f"  tools_used: {used}")
-        for key in ("quality", "tool_coverage", "count_match"):
+        report_lines += [f"## Q: {q}", "", f"- tools_used: `{used}`", ""]
+        for key in metric_keys:
             ev = evals.get(key)
             if ev is not None:
-                print(f"  {key:14s}: score={ev.score:.2f}  {ev.comment or ''}")
+                print(f"  {key:22s}: score={ev.score:.2f}  {ev.comment or ''}")
+                report_lines.append(f"- **{key}**: `{ev.score:.2f}` — {ev.comment or ''}")
+                if ev.score is not None:
+                    sums[key] += ev.score
+                    counts[key] += 1
+        report_lines.append("")
+
+    # 평균 요약
+    print("\n========== 메트릭 평균 ==========")
+    report_lines += ["## 메트릭 평균", ""]
+    for key in metric_keys:
+        if counts[key]:
+            avg = sums[key] / counts[key]
+            print(f"  {key:22s}: {avg:.2f}")
+            report_lines.append(f"- **{key}**: `{avg:.2f}`")
+    report_lines.append("")
+
+    out_path = os.path.join(os.path.dirname(__file__),
+                            "docs", "llm-evaluation", "evaluation-report.md")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
+    print(f"\n[저장] {out_path}")
 
     print("\n결과는 LangSmith UI(smith.langchain.com → Datasets & Experiments)에서 "
           "그래프와 함께 확인할 수 있습니다.")

@@ -32,3 +32,6 @@ Thumbs.db
 # Logs / 임시
 *.log
 .cache/
+
+# 로컬 문서 (LLM 평가 노트 등)
+docs/
