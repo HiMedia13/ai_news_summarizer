@@ -6,10 +6,12 @@ import json
 import operator
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from typing import Annotated, TypedDict
 
 import feedparser
 import requests
+from urllib.parse import quote
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
@@ -50,10 +52,13 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 
 
 @traceable(run_type="retriever", name="fetch_geeknews")
-def fetch_geeknews(limit=10):
+def fetch_geeknews(query: str = "", limit: int = 10):
+    """GeekNews RSS는 서버측 검색을 지원하지 않으므로,
+    더 많은 항목을 받아 제목/요약에 키워드가 포함된 것만 클라이언트에서 필터링."""
     feed = feedparser.parse("https://news.hada.io/rss/news")
+    fetch_pool = 50 if query and query.strip() and query.strip().upper() != "AI" else limit
     items = []
-    for entry in feed.entries[:limit]:
+    for entry in feed.entries[:fetch_pool]:
         items.append({
             "title": entry.title,
             "link": entry.link,
@@ -61,15 +66,22 @@ def fetch_geeknews(limit=10):
             "published": entry.get("published", ""),
             "source": "GeekNews",
         })
-    return items
+    q = (query or "").strip()
+    if q and q.upper() != "AI":
+        tokens = [t.lower() for t in q.split() if t.strip()]
+        def _match(it):
+            hay = (it["title"] + " " + it["summary"]).lower()
+            return all(t in hay for t in tokens)
+        filtered = [it for it in items if _match(it)]
+        return filtered[:limit]
+    return items[:limit]
 
 
 @traceable(run_type="retriever", name="fetch_naver_api")
 def fetch_naver_api(query="AI", limit=10):
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return [{"title": "(네이버 API 키가 설정되지 않았습니다)", "link": "#",
-                 "summary": ".env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 추가 필요",
-                 "published": "", "source": "네이버 검색 API", "ai_summary": ""}]
+        # API 키가 없으면 크롤링으로 자동 폴백
+        return fetch_naver_crawl(query, limit)
     url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -92,26 +104,88 @@ def fetch_naver_api(query="AI", limit=10):
 
 @traceable(run_type="retriever", name="fetch_naver_crawl")
 def fetch_naver_crawl(query="AI", limit=10):
-    """네이버 뉴스 검색 결과 페이지 파싱 (ToS 주의 - 개인 학습 용도로만)."""
-    url = f"https://search.naver.com/search.naver?where=news&query={query}&sort=1"
+    """네이버 뉴스 검색 결과 페이지 파싱 (ToS 주의 - 개인 학습 용도로만).
+    최근 2년치만 가져오도록 날짜 범위(nso)를 URL에 추가."""
+    today = date.today()
+    two_years_ago = today - timedelta(days=365 * 2)
+    ds = two_years_ago.strftime("%Y.%m.%d")
+    de = today.strftime("%Y.%m.%d")
+    nso = f"so:dd,p:from{two_years_ago.strftime('%Y%m%d')}to{today.strftime('%Y%m%d')}"
+    q_encoded = quote(query or "", safe="")
+    url = (
+        "https://search.naver.com/search.naver?where=news"
+        f"&query={q_encoded}&sort=1&pd=3&ds={ds}&de={de}&nso={quote(nso, safe=':,')}"
+    )
     try:
         r = requests.get(url, headers=UA, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         items = []
-        # 네이버 뉴스 검색 결과는 구조가 자주 바뀜 - 여러 셀렉터 시도
-        nodes = soup.select("ul.list_news li.bx") or soup.select("div.group_news li")
-        for li in nodes[:limit]:
-            a = li.select_one("a.news_tit") or li.select_one("a.tit")
-            desc = li.select_one("div.dsc_wrap") or li.select_one("a.api_txt_lines")
+
+        # 새 구조 (2025~): sds-comps 디자인 시스템 기반
+        # 각 기사 헤드라인은 span.sds-comps-text-type-headline1, 부모 <a>가 링크
+        # 기사별 컨테이너: 헤드라인 anchor에서 위로 올라가 headline span이 정확히 1개인 가장 작은 div
+        headlines = soup.select("span.sds-comps-text-type-headline1")
+        seen_links = set()
+        for span in headlines:
+            a = span.find_parent("a", href=True)
             if not a:
                 continue
+            href = a.get("href", "")
+            if not href or href in seen_links:
+                continue
+            seen_links.add(href)
+            title = span.get_text(strip=True)
+
+            # 기사별 컨테이너 찾기 (헤드라인 1개만 포함하는 최소 ancestor)
+            container = a.parent
+            for _ in range(6):
+                if container is None:
+                    break
+                if len(container.select("span.sds-comps-text-type-headline1")) == 1:
+                    break
+                container = container.parent
+
+            summary = ""
+            published = ""
+            if container is not None:
+                # 본문 요약은 body1, 시간/메타는 body2
+                body1 = container.select_one("span.sds-comps-text-type-body1")
+                if body1:
+                    txt = body1.get_text(strip=True)
+                    if txt and txt != title:
+                        summary = txt
+                for b2 in container.select("span.sds-comps-text-type-body2"):
+                    txt = b2.get_text(strip=True)
+                    if txt and ("전" in txt or txt.endswith(".")):
+                        published = txt
+                        break
+
             items.append({
-                "title": a.get("title") or a.get_text(strip=True),
-                "link": a.get("href", ""),
-                "summary": desc.get_text(strip=True) if desc else "",
-                "published": "",
+                "title": title,
+                "link": href,
+                "summary": summary,
+                "published": published,
                 "source": "네이버 뉴스 크롤링",
             })
+            if len(items) >= limit:
+                break
+
+        # 구버전 셀렉터 폴백
+        if not items:
+            nodes = soup.select("ul.list_news li.bx") or soup.select("div.group_news li")
+            for li in nodes[:limit]:
+                a = li.select_one("a.news_tit") or li.select_one("a.tit")
+                desc = li.select_one("div.dsc_wrap") or li.select_one("a.api_txt_lines")
+                if not a:
+                    continue
+                items.append({
+                    "title": a.get("title") or a.get_text(strip=True),
+                    "link": a.get("href", ""),
+                    "summary": desc.get_text(strip=True) if desc else "",
+                    "published": "",
+                    "source": "네이버 뉴스 크롤링",
+                })
+
         if not items:
             items.append({"title": "(크롤링 결과 없음 - 네이버 페이지 구조 변경 가능성)",
                           "link": "#", "summary": "", "published": "",
@@ -224,7 +298,7 @@ def route_sources(state: NewsState):
 
 
 def fetch_geeknews_node(state: NewsState):
-    return {"items": fetch_geeknews()}
+    return {"items": fetch_geeknews(state.get("query", ""))}
 
 
 def fetch_naver_api_node(state: NewsState):
@@ -308,12 +382,18 @@ news_agent = _build_graph()
 # ---------------------------------------------------------------------------
 @tool
 def search_news(source: str = "geeknews", query: str = "AI") -> str:
-    """뉴스 검색 도구. source는 'geeknews' (RSS, query 무시) 또는 'naver' (네이버 API).
+    """뉴스 검색 도구.
+    source 옵션:
+      - 'geeknews'    : GeekNews RSS (query로 클라이언트 필터링)
+      - 'naver'       : 네이버 검색 API (키 없으면 자동으로 크롤링 폴백)
+      - 'naver_crawl' : 네이버 뉴스 검색 페이지 크롤링 (최근 2년 한정)
     검색된 기사들의 번호/제목/요약/출처를 텍스트로 반환."""
     if source == "naver":
         items = fetch_naver_api(query)
+    elif source == "naver_crawl":
+        items = fetch_naver_crawl(query)
     else:
-        items = fetch_geeknews()
+        items = fetch_geeknews(query)
     if not items:
         return "(검색 결과 없음)"
     lines = []
@@ -345,7 +425,10 @@ def compose_brief(headlines_with_scores: str) -> str:
 
 _REACT_PROMPT = (
     "당신은 한국어 뉴스 큐레이션 에이전트입니다. 다음 도구로 사용자 요청에 정확히 답하세요.\n"
-    "- search_news(source, query): 'geeknews' 또는 'naver' 에서 뉴스 가져오기\n"
+    "- search_news(source, query): source는 'geeknews' | 'naver' | 'naver_crawl'.\n"
+    "    * 사용자가 특정 키워드(예: '반도체', 'GPT')로 검색을 요청하면 'naver' 또는 'naver_crawl'을 사용.\n"
+    "    * 'GeekNews'를 명시하거나 IT 해커뉴스류 헤드라인을 원하면 'geeknews'.\n"
+    "    * 'naver'가 결과가 비거나 부족하면 'naver_crawl'로 재시도.\n"
     "- rate_article(title, content): 단일 기사 중요도(1~5) + 한 줄 평가\n"
     "- compose_brief(headlines_with_scores): 여러 기사를 종합 브리핑\n\n"
     "엄격한 규칙 (반드시 지킬 것):\n"
