@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 뉴스 요약기</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #181b22;
+      --border: #2a2f3a;
+      --text: #e6e8ec;
+      --muted: #9aa3b2;
+      --accent: #6ea8ff;
+      --accent-soft: #1e2a44;
+      --tag: #2a3142;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    header {
+      padding: 28px 24px 12px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    .sub { color: var(--muted); font-size: 14px; }
+    main { max-width: 960px; margin: 0 auto; padding: 0 24px 40px; }
+    form.controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: end;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 16px 0 24px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+    label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+    input[type="text"] {
+      background: #0f131b;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      min-width: 180px;
+    }
+    .checks { display: flex; flex-wrap: wrap; gap: 10px; }
+    .check {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #0f131b;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .check input { accent-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: #0b1220;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.07); }
+    .count { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 12px;
+    }
+    .card .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .tag {
+      background: var(--tag);
+      color: var(--muted);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .card h3 a { color: var(--text); text-decoration: none; }
+    .card h3 a:hover { color: var(--accent); }
+    .ai {
+      background: var(--accent-soft);
+      border-left: 3px solid var(--accent);
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    .ai .ai-label { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; }
+    .ai-eval {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(110, 168, 255, 0.25);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .stars { color: #f5c518; font-size: 14px; letter-spacing: 1px; }
+    .imp-badge {
+      display: inline-block;
+      min-width: 22px;
+      text-align: center;
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+    .eval-text { flex: 1; }
+    .raw { color: var(--muted); font-size: 13px; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    .empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--muted);
+      background: var(--card);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+    }
+    .brief {
+      background: linear-gradient(135deg, rgba(110,168,255,0.18), rgba(110,168,255,0.04));
+      border: 1px solid rgba(110,168,255,0.4);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin: 16px 0 20px;
+    }
+    .brief .brief-label {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+    }
+    .brief .brief-text { font-size: 15px; line-height: 1.65; }
+    .top-badge {
+      background: #f5c518;
+      color: #0b1220;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.04em;
+    }
+    .card.top-card { border-color: rgba(245, 197, 24, 0.5); }
+    @media (max-width: 600px) {
+      form.controls { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI 뉴스 에이전트</h1>
+    <div class="sub">LangGraph <b>workflow</b> · fetch → enrich → rank → brief
+      &nbsp;·&nbsp; <a href="/agent" style="color: var(--accent);">ReAct 에이전트 모드 →</a></div>
+  </header>
+
+  <main>
+    <form class="controls" method="get" action="/">
+      <input type="hidden" name="submitted" value="1">
+      <div class="row" style="flex-direction: column; align-items: stretch; gap: 12px;">
+        <label class="field">
+          검색어 (네이버 소스에 사용)
+          <input type="text" name="q" value="{{ query }}" placeholder="예: AI, GPT, 반도체">
+        </label>
+
+        <div class="checks">
+          <label class="check">
+            <input type="checkbox" name="source" value="geeknews"
+              {% if 'geeknews' in sources %}checked{% endif %}> GeekNews RSS
+          </label>
+          <label class="check">
+            <input type="checkbox" name="source" value="naver_api"
+              {% if 'naver_api' in sources %}checked{% endif %}> 네이버 검색 API
+          </label>
+          <label class="check">
+            <input type="checkbox" name="source" value="naver_crawl"
+              {% if 'naver_crawl' in sources %}checked{% endif %}> 네이버 크롤링
+          </label>
+          <label class="check">
+            <input type="checkbox" name="summarize" value="1"
+              {% if do_summarize %}checked{% endif %}> AI 요약 사용
+          </label>
+        </div>
+      </div>
+      <button type="submit">불러오기</button>
+    </form>
+
+    {% if brief %}
+      <div class="brief">
+        <div class="brief-label">에이전트 브리핑 · 오늘의 핵심</div>
+        <div class="brief-text">{{ brief }}</div>
+      </div>
+    {% endif %}
+
+    {% if items %}
+      <div class="count">총 {{ items|length }}건 {% if top_picks %}· TOP {{ top_picks|length }} 강조{% endif %}</div>
+      {% for it in items %}
+        <article class="card {% if it.is_top %}top-card{% endif %}">
+          <div class="tags">
+            {% if it.is_top %}<span class="top-badge">TOP</span>{% endif %}
+            <span class="tag">{{ it.source }}</span>
+            {% if it.published %}<span class="tag">{{ it.published }}</span>{% endif %}
+          </div>
+          <h3>
+            {% if it.link and it.link != '#' %}
+              <a href="{{ it.link }}" target="_blank" rel="noopener">{{ it.title }}</a>
+            {% else %}
+              {{ it.title }}
+            {% endif %}
+          </h3>
+
+          {% if it.ai_summary %}
+            <div class="ai">
+              <div class="ai-label">AI 요약</div>
+              <div>{{ it.ai_summary }}</div>
+              {% if it.importance %}
+                <div class="ai-eval">
+                  <span class="imp-badge">{{ it.importance }}/5</span>
+                  <span class="stars">{% for i in range(5) %}{% if i < it.importance %}★{% else %}☆{% endif %}{% endfor %}</span>
+                  <span class="eval-text">{{ it.evaluation }}</span>
+                </div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if it.summary %}
+            <div class="raw">{{ it.summary }}</div>
+          {% endif %}
+        </article>
+      {% endfor %}
+    {% else %}
+      <div class="empty">결과가 없습니다. 소스를 선택하거나 검색어를 변경해보세요.</div>
+    {% endif %}
+  </main>
+</body>
+</html>

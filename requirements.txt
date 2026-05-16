@@ -1,0 +1,10 @@
+flask>=3.0
+openai>=1.40
+python-dotenv>=1.0
+feedparser>=6.0
+requests>=2.31
+beautifulsoup4>=4.12
+langsmith>=0.1
+langgraph>=0.2
+langchain-openai>=0.2
+markdown>=3.5
