@@ -50,13 +50,58 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
+EMBED_MODEL = "text-embedding-3-small"
+# 소스별 임계값 — retrieval-report.md 평가 결과 반영
+# naver 계열은 이미 keyword 매칭된 결과라 임계값이 거의 무의미 (0.15가 평균 최적)
+# geeknews는 검색 없이 전체 풀에서 의미로만 선별하므로 더 엄격한 컷(0.25) 필요
+RELEVANCE_THRESHOLD = 0.15        # 기본값(naver 등 키워드 검색 기반 소스)
+RELEVANCE_THRESHOLD_RSS = 0.25    # RSS/비검색 소스(geeknews)
+
+
+def _cosine(a, b):
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+@traceable(run_type="chain", name="rank_by_relevance",
+           metadata={"model": EMBED_MODEL})
+def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
+                      threshold: float | None = None) -> list[dict]:
+    """OpenAI 임베딩으로 query와 각 item의 의미적 유사도를 계산해 상위 top_k 반환.
+    threshold 미만은 노이즈로 간주해 제외. 임베딩 실패 시 원본 순서로 fallback.
+    threshold=None이면 모듈 레벨 상수(RELEVANCE_THRESHOLD)를 동적으로 참조."""
+    if threshold is None:
+        threshold = RELEVANCE_THRESHOLD
+    q = (query or "").strip()
+    if not q or q.upper() == "AI" or not items or client is None:
+        return items[:top_k]
+    texts = []
+    for it in items:
+        title = it.get("title", "")
+        summary = (it.get("summary") or "")[:300]
+        texts.append(f"{title}\n{summary}".strip())
+    try:
+        resp = client.embeddings.create(model=EMBED_MODEL, input=[q] + texts)
+        q_emb = resp.data[0].embedding
+        item_embs = [d.embedding for d in resp.data[1:]]
+        scored = [(it, _cosine(q_emb, emb)) for it, emb in zip(items, item_embs)]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        ranked = [it for it, s in scored if s >= threshold]
+        return ranked[:top_k]
+    except Exception:
+        return items[:top_k]
+
 
 @traceable(run_type="retriever", name="fetch_geeknews")
 def fetch_geeknews(query: str = "", limit: int = 10):
-    """GeekNews RSS는 서버측 검색을 지원하지 않으므로,
-    더 많은 항목을 받아 제목/요약에 키워드가 포함된 것만 클라이언트에서 필터링."""
+    """GeekNews RSS — 서버측 검색이 없으므로 50건을 받아 임베딩 의미 유사도로 재랭킹.
+    query가 비어 있거나 'AI'면 최신 순 그대로."""
     feed = feedparser.parse("https://news.hada.io/rss/news")
-    fetch_pool = 50 if query and query.strip() and query.strip().upper() != "AI" else limit
+    q = (query or "").strip()
+    fetch_pool = 50 if q and q.upper() != "AI" else limit
     items = []
     for entry in feed.entries[:fetch_pool]:
         items.append({
@@ -66,15 +111,7 @@ def fetch_geeknews(query: str = "", limit: int = 10):
             "published": entry.get("published", ""),
             "source": "GeekNews",
         })
-    q = (query or "").strip()
-    if q and q.upper() != "AI":
-        tokens = [t.lower() for t in q.split() if t.strip()]
-        def _match(it):
-            hay = (it["title"] + " " + it["summary"]).lower()
-            return all(t in hay for t in tokens)
-        filtered = [it for it in items if _match(it)]
-        return filtered[:limit]
-    return items[:limit]
+    return rank_by_relevance(q, items, top_k=limit, threshold=RELEVANCE_THRESHOLD_RSS)
 
 
 @traceable(run_type="retriever", name="fetch_naver_api")
@@ -87,7 +124,9 @@ def fetch_naver_api(query="AI", limit=10):
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
     }
-    params = {"query": query, "display": limit, "sort": "date"}
+    # 더 넓은 풀(30건) 받아 임베딩 재랭킹 → 상위 limit건만 반환
+    fetch_pool = min(30, max(limit, 10))
+    params = {"query": query, "display": fetch_pool, "sort": "date"}
     r = requests.get(url, headers=headers, params=params, timeout=10)
     r.raise_for_status()
     items = []
@@ -99,7 +138,7 @@ def fetch_naver_api(query="AI", limit=10):
             "published": item.get("pubDate", ""),
             "source": "네이버 검색 API",
         })
-    return items
+    return rank_by_relevance(query, items, top_k=limit)
 
 
 @traceable(run_type="retriever", name="fetch_naver_crawl")
