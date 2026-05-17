@@ -8,3 +8,4 @@ langsmith>=0.1
 langgraph>=0.2
 langchain-openai>=0.2
 markdown>=3.5
+discord.py>=2.4
