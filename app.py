@@ -5,6 +5,7 @@ AI 뉴스 크롤링 + OpenAI 요약 웹앱
 import json
 import operator
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from typing import Annotated, TypedDict
@@ -66,6 +67,63 @@ def _cosine(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+# 자연어 질문 감지용 — 의문어/요청동사 패턴
+_NATURAL_HINT_RE = re.compile(
+    r"(어떤|어떻|어때|어디|언제|어느|왜|뭐|무엇|있나|있어|있을까|"
+    r"되나|되어|될까|해줘|알려|보여|평가|분석|설명|요약|정리)"
+)
+
+
+def _looks_natural(query: str) -> bool:
+    """질문이 자연어 문장인지 휴리스틱으로 판단.
+    - '?' 포함, 의문어/요청동사 포함, 또는 15자 초과일 때 True."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    if "?" in q or "？" in q:
+        return True
+    if _NATURAL_HINT_RE.search(q):
+        return True
+    return len(q) > 15
+
+
+@traceable(run_type="chain", name="rewrite_query_for_search")
+def _rewrite_query(query: str) -> tuple[str, str]:
+    """자연어 질문이면 LLM으로 검색 키워드를 추출.
+
+    Returns: (search_query, semantic_query)
+      - search_query: 외부 검색 API/필터에 던질 키워드형 문자열
+      - semantic_query: 의미 재랭킹용 — 자연어 의도 그대로 보존
+    짧은 키워드 input은 LLM 호출을 생략해 비용/지연을 절약."""
+    q = (query or "").strip()
+    if not q or not _looks_natural(q) or client is None:
+        return q, q
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system",
+                 "content": (
+                     "당신은 한국어 검색 키워드 추출기입니다. 사용자의 자연어 질문에서 "
+                     "뉴스 검색 API에 던질 핵심 명사·고유명사만 공백으로 구분해 출력하세요. "
+                     "조사·의문어·동사 어미는 모두 제거. 다른 텍스트 없이 키워드만.\n"
+                     "예시:\n"
+                     "  Q: 최근 AI 반도체 시장에서 엔비디아 위치는 어때?\n"
+                     "  A: AI 반도체 엔비디아\n"
+                     "  Q: Claude의 코딩 능력은 어떻게 발전했나?\n"
+                     "  A: Claude 코딩 능력"
+                 )},
+                {"role": "user", "content": q},
+            ],
+            max_tokens=40,
+            temperature=0,
+        )
+        kw = (resp.choices[0].message.content or "").strip().strip('"\'')
+        return (kw if kw else q), q
+    except Exception:
+        return q, q
+
+
 @traceable(run_type="chain", name="rank_by_relevance",
            metadata={"model": EMBED_MODEL})
 def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
@@ -96,12 +154,17 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
 
 
 @traceable(run_type="retriever", name="fetch_geeknews")
-def fetch_geeknews(query: str = "", limit: int = 10):
+def fetch_geeknews(query: str = "", limit: int = 10, *, intent: str = ""):
     """GeekNews RSS — 서버측 검색이 없으므로 50건을 받아 임베딩 의미 유사도로 재랭킹.
-    query가 비어 있거나 'AI'면 최신 순 그대로."""
+    query가 비어 있거나 'AI'면 최신 순 그대로.
+    intent가 주어지면 그 자연어 문장으로 재랭킹(맥락 매칭). 비어 있으면 query를 자연어로
+    감지해 자동으로 키워드/의도 분리."""
+    if intent:
+        search_q, semantic_q = (query or "").strip(), intent.strip()
+    else:
+        search_q, semantic_q = _rewrite_query(query)
     feed = feedparser.parse("https://news.hada.io/rss/news")
-    q = (query or "").strip()
-    fetch_pool = 50 if q and q.upper() != "AI" else limit
+    fetch_pool = 50 if search_q and search_q.upper() != "AI" else limit
     items = []
     for entry in feed.entries[:fetch_pool]:
         items.append({
@@ -111,14 +174,18 @@ def fetch_geeknews(query: str = "", limit: int = 10):
             "published": entry.get("published", ""),
             "source": "GeekNews",
         })
-    return rank_by_relevance(q, items, top_k=limit, threshold=RELEVANCE_THRESHOLD_RSS)
+    return rank_by_relevance(semantic_q, items, top_k=limit, threshold=RELEVANCE_THRESHOLD_RSS)
 
 
 @traceable(run_type="retriever", name="fetch_naver_api")
-def fetch_naver_api(query="AI", limit=10):
+def fetch_naver_api(query="AI", limit=10, *, intent: str = ""):
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         # API 키가 없으면 크롤링으로 자동 폴백
-        return fetch_naver_crawl(query, limit)
+        return fetch_naver_crawl(query, limit, intent=intent)
+    if intent:
+        search_q, semantic_q = (query or "").strip(), intent.strip()
+    else:
+        search_q, semantic_q = _rewrite_query(query)
     url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -126,7 +193,7 @@ def fetch_naver_api(query="AI", limit=10):
     }
     # 더 넓은 풀(30건) 받아 임베딩 재랭킹 → 상위 limit건만 반환
     fetch_pool = min(30, max(limit, 10))
-    params = {"query": query, "display": fetch_pool, "sort": "date"}
+    params = {"query": search_q, "display": fetch_pool, "sort": "date"}
     r = requests.get(url, headers=headers, params=params, timeout=10)
     r.raise_for_status()
     items = []
@@ -138,23 +205,30 @@ def fetch_naver_api(query="AI", limit=10):
             "published": item.get("pubDate", ""),
             "source": "네이버 검색 API",
         })
-    return rank_by_relevance(query, items, top_k=limit)
+    return rank_by_relevance(semantic_q, items, top_k=limit)
 
 
 @traceable(run_type="retriever", name="fetch_naver_crawl")
-def fetch_naver_crawl(query="AI", limit=10):
+def fetch_naver_crawl(query="AI", limit=10, *, intent: str = ""):
     """네이버 뉴스 검색 결과 페이지 파싱 (ToS 주의 - 개인 학습 용도로만).
-    최근 2년치만 가져오도록 날짜 범위(nso)를 URL에 추가."""
+    최근 2년치만 가져오도록 날짜 범위(nso)를 URL에 추가.
+    intent가 있으면 자연어 의도로 재랭킹, 없으면 query를 자동으로 키워드/의도 분리."""
+    if intent:
+        search_q, semantic_q = (query or "").strip(), intent.strip()
+    else:
+        search_q, semantic_q = _rewrite_query(query)
     today = date.today()
     two_years_ago = today - timedelta(days=365 * 2)
     ds = two_years_ago.strftime("%Y.%m.%d")
     de = today.strftime("%Y.%m.%d")
     nso = f"so:dd,p:from{two_years_ago.strftime('%Y%m%d')}to{today.strftime('%Y%m%d')}"
-    q_encoded = quote(query or "", safe="")
+    q_encoded = quote(search_q or "", safe="")
     url = (
         "https://search.naver.com/search.naver?where=news"
         f"&query={q_encoded}&sort=1&pd=3&ds={ds}&de={de}&nso={quote(nso, safe=':,')}"
     )
+    # 재랭킹이 의미 있도록 limit보다 큰 풀(최소 20건)을 받아 의미 정렬 후 상위 limit건
+    fetch_pool = max(limit * 3, 20)
     try:
         r = requests.get(url, headers=UA, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
@@ -206,13 +280,13 @@ def fetch_naver_crawl(query="AI", limit=10):
                 "published": published,
                 "source": "네이버 뉴스 크롤링",
             })
-            if len(items) >= limit:
+            if len(items) >= fetch_pool:
                 break
 
         # 구버전 셀렉터 폴백
         if not items:
             nodes = soup.select("ul.list_news li.bx") or soup.select("div.group_news li")
-            for li in nodes[:limit]:
+            for li in nodes[:fetch_pool]:
                 a = li.select_one("a.news_tit") or li.select_one("a.tit")
                 desc = li.select_one("div.dsc_wrap") or li.select_one("a.api_txt_lines")
                 if not a:
@@ -226,10 +300,10 @@ def fetch_naver_crawl(query="AI", limit=10):
                 })
 
         if not items:
-            items.append({"title": "(크롤링 결과 없음 - 네이버 페이지 구조 변경 가능성)",
-                          "link": "#", "summary": "", "published": "",
-                          "source": "네이버 뉴스 크롤링", "ai_summary": ""})
-        return items
+            return [{"title": "(크롤링 결과 없음 - 네이버 페이지 구조 변경 가능성)",
+                     "link": "#", "summary": "", "published": "",
+                     "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
+        return rank_by_relevance(semantic_q, items, top_k=limit)
     except Exception as e:
         return [{"title": f"(크롤링 실패: {e})", "link": "#", "summary": "",
                  "published": "", "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
@@ -420,19 +494,24 @@ news_agent = _build_graph()
 # ReAct 에이전트 (LLM이 도구 호출을 스스로 결정)
 # ---------------------------------------------------------------------------
 @tool
-def search_news(source: str = "geeknews", query: str = "AI") -> str:
+def search_news(source: str = "geeknews", query: str = "AI", intent: str = "") -> str:
     """뉴스 검색 도구.
     source 옵션:
       - 'geeknews'    : GeekNews RSS (query로 클라이언트 필터링)
       - 'naver'       : 네이버 검색 API (키 없으면 자동으로 크롤링 폴백)
       - 'naver_crawl' : 네이버 뉴스 검색 페이지 크롤링 (최근 2년 한정)
+    인자:
+      - query : 검색 API에 던질 핵심 키워드(공백 구분). 예: "AI 반도체 엔비디아"
+      - intent: (선택) 사용자가 알고 싶은 맥락을 자연어 한 문장으로.
+                의미 재랭킹에 사용되어, 키워드 매칭만으로는 잡히지 않는
+                문맥적 관련성을 확보. 비워두면 query가 사용됨.
     검색된 기사들의 번호/제목/요약/출처를 텍스트로 반환."""
     if source == "naver":
-        items = fetch_naver_api(query)
+        items = fetch_naver_api(query, intent=intent)
     elif source == "naver_crawl":
-        items = fetch_naver_crawl(query)
+        items = fetch_naver_crawl(query, intent=intent)
     else:
-        items = fetch_geeknews(query)
+        items = fetch_geeknews(query, intent=intent)
     if not items:
         return "(검색 결과 없음)"
     lines = []
@@ -465,7 +544,12 @@ def compose_brief(headlines_with_scores: str) -> str:
 _REACT_PROMPT = (
     "당신은 한국어 뉴스 큐레이션 에이전트입니다.\n\n"
     "## 도구\n"
-    "- search_news(source, query): source는 'geeknews' | 'naver' | 'naver_crawl'.\n"
+    "- search_news(source, query, intent): source는 'geeknews' | 'naver' | 'naver_crawl'.\n"
+    "    * **query**: 검색 API에 던질 핵심 키워드만(공백 구분). 예: 'AI 반도체 엔비디아'.\n"
+    "      자연어 문장이나 의문어·조사를 절대 query에 넣지 말 것.\n"
+    "    * **intent**: 사용자가 알고 싶은 맥락을 **원본 자연어 한 문장**으로 그대로 전달.\n"
+    "      예: '엔비디아의 AI 반도체 시장 위치와 최근 동향'. 의미 재랭킹에 쓰여,\n"
+    "      키워드만으로는 잡히지 않는 문맥적 관련성을 확보.\n"
     "    * **키워드 검색(예: 'AI 반도체', 'GPT', '메타버스')**: 'geeknews'와 'naver' "
     "**두 소스를 모두 호출**해 IT 해커뉴스와 한국 일반 뉴스를 함께 수집. "
     "'naver' 결과가 부족하면 'naver_crawl'로 보강.\n"
