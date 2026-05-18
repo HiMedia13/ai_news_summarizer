@@ -401,6 +401,68 @@ def make_brief(top_picks):
 
 
 # ---------------------------------------------------------------------------
+# Self-RAG: critique + source fallback + retry
+# ---------------------------------------------------------------------------
+_FALLBACK_CHAIN = ["geeknews", "naver_api", "naver_crawl"]
+
+
+def expand_sources(sources: list[str]) -> list[str]:
+    """폴백 체인: 누락된 소스를 정해진 순서로 덧붙여 retry 시 더 넓게 검색."""
+    expanded = list(sources)
+    for s in _FALLBACK_CHAIN:
+        if s not in expanded:
+            expanded.append(s)
+    return expanded
+
+
+@traceable(run_type="chain", name="critique_results",
+           metadata={"model": "gpt-4o-mini"})
+def critique_results(query: str, top_picks: list[dict],
+                     analyzed: list[dict]) -> dict:
+    """검색·분석 결과가 사용자 질문에 충분한지 1~5점으로 채점.
+    반환: {score, reason, suggest_query}. client가 없거나 호출 실패 시 통과 처리."""
+    if client is None:
+        return {"score": 5, "reason": "", "suggest_query": ""}
+    real = [a for a in (analyzed or [])
+            if a.get("link") and a.get("link") != "#"]
+    if not real:
+        return {"score": 1, "reason": "검색 결과 0건", "suggest_query": ""}
+    bullets = "\n".join(
+        f"- ({a.get('importance', 0)}/5) {a.get('title', '')}: "
+        f"{(a.get('evaluation') or '')[:60]}"
+        for a in (top_picks or real[:5])
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "당신은 검색 결과 품질 평가관입니다. 사용자 질문과 "
+                    "검색·분석된 기사 목록을 보고 결과가 질문에 답하기에 "
+                    "충분한지 1~5점으로 채점하세요.\n"
+                    "1=거의 무관, 3=부분 충분, 5=매우 적합. JSON만 응답:\n"
+                    '{"score": 1~5 정수, "reason": "한 줄 이유", '
+                    '"suggest_query": "더 나은 검색어 또는 빈 문자열"}'
+                )},
+                {"role": "user",
+                 "content": f"[질문]\n{query}\n\n[기사 목록]\n{bullets}"},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=200,
+            temperature=0,
+        )
+        data = json.loads(resp.choices[0].message.content)
+        return {
+            "score": max(1, min(5, int(data.get("score", 3)))),
+            "reason": (data.get("reason") or "").strip(),
+            "suggest_query": (data.get("suggest_query") or "").strip(),
+        }
+    except Exception:
+        log.exception("critique_results 실패")
+        return {"score": 5, "reason": "", "suggest_query": ""}
+
+
+# ---------------------------------------------------------------------------
 # LangGraph 에이전트
 # ---------------------------------------------------------------------------
 class NewsState(TypedDict):
@@ -519,6 +581,53 @@ def sort_for_display(analyzed: list[dict], top_picks: list[dict]) -> list[dict]:
     top_links = {t.get("link") for t in top_picks}
     real.sort(key=lambda x: (x.get("link") not in top_links, -x.get("importance", 0)))
     return real
+
+
+@traceable(run_type="chain", name="reflective_news_agent")
+def reflective_news_agent(query: str, sources: list[str],
+                          do_summarize: bool = True, *,
+                          max_retries: int = 1,
+                          critique_threshold: int = 3) -> dict:
+    """news_agent를 실행 → critic 점수 < threshold면 query rewrite +
+    sources 확장으로 1회 retry. Self-RAG 풀 패턴.
+
+    do_summarize=False면 분석/채점이 의미 없어 critic을 건너뛴다.
+    retry 결과가 거의 비어 있으면 원본 결과를 유지(회귀 방지)."""
+    result = news_agent.invoke(build_news_state(query, sources, do_summarize))
+
+    if max_retries <= 0 or not do_summarize or client is None:
+        return result
+
+    critique = critique_results(
+        query, result.get("top_picks", []), result.get("analyzed", []),
+    )
+    if critique["score"] >= critique_threshold:
+        return result
+
+    new_query = critique["suggest_query"] or query
+    new_sources = expand_sources(sources)
+    if new_query == query and new_sources == list(sources):
+        return result   # 변화가 없으면 재시도해도 같은 결과
+
+    log.info(
+        "reflective retry — score=%s, sources=%s→%s, query=%r→%r",
+        critique["score"], sources, new_sources, query, new_query,
+    )
+    retry = news_agent.invoke(
+        build_news_state(new_query, new_sources, do_summarize)
+    )
+
+    retry_real = [a for a in retry.get("analyzed", [])
+                  if a.get("link") and a.get("link") != "#"]
+    if not retry_real:
+        return result   # retry가 빈 결과면 원본 유지
+
+    if retry.get("brief") and critique["reason"]:
+        retry["brief"] = (
+            f"{retry['brief']}\n\n_검색을 한 번 보강했습니다 — "
+            f"이전 결과: {critique['reason']}._"
+        )
+    return retry
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +753,7 @@ def index():
     query = request.args.get("q", "AI")
     do_summarize = request.args.get("summarize") == "1" if submitted else True
 
-    result = news_agent.invoke(build_news_state(query, sources, do_summarize))
+    result = reflective_news_agent(query, sources, do_summarize)
 
     items = list(result.get("analyzed", []))
     top_picks = result.get("top_picks", [])

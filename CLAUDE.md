@@ -4,11 +4,11 @@
 
 ## 진입점
 
-- `app.py` 단일 모듈에 retrieval / 분석 / LangGraph `news_agent` / ReAct `react_agent` / Flask 라우트가 모두 들어 있음.
+- `app.py` 단일 모듈에 retrieval / 분석 / LangGraph `news_agent` / Self-RAG wrapper `reflective_news_agent` / ReAct `react_agent` / Flask 라우트가 모두 들어 있음.
   - `python app.py` → `http://localhost:5000` (Flask)
-  - `/` : LangGraph `news_agent` — 결정론적 파이프라인 (분석 + top_picks + brief)
-  - `/agent` : ReAct `react_agent` — LLM이 도구를 동적으로 결정
-- `discord_bot.py` : `/news`, `/headlines` 슬래시 커맨드. `/news`는 웹과 **동일한** `news_agent`를 호출(2026-05 이후 통일). `_format_news_result`로 디스코드용 마크다운 변환.
+  - `/` : `reflective_news_agent` — `news_agent` 한 번 실행 후 critic 점수 < 3이면 query rewrite + sources 확장으로 1회 retry
+  - `/agent` : ReAct `react_agent` — LLM이 도구를 동적으로 결정 (별도 흐름)
+- `discord_bot.py` : `/news`, `/headlines` 슬래시 커맨드. `/news`는 웹과 **동일한** `reflective_news_agent`를 호출(2026-05 이후 통일). `_format_news_result`로 디스코드용 마크다운 변환.
 - `evaluate_retrieval.py` : retrieval precision을 LLM-judge로 평가. 결과는 `docs/llm-evaluation/retrieval-report.md`(로컬 전용, `docs/`는 .gitignore).
 - `evaluate_agent.py` : ReAct 에이전트의 trace 평가(별도).
 
@@ -29,6 +29,30 @@ _rewrite_query (lru_cache, 자연어→키워드 + 의도 보존)
                                               ▼
                                        top_k items
 ```
+
+## Self-RAG 흐름 (reflective_news_agent)
+
+```
+reflective_news_agent(query, sources, do_summarize)
+  │
+  ▼
+news_agent.invoke()         ── (1차) fetch → enrich → rank → brief
+  │
+  ▼
+critique_results            ── critic LLM(gpt-4o-mini)이 1~5점 채점
+  │
+  ├─ score ≥ 3  ────→  (그대로 반환)
+  │
+  └─ score < 3  ────→  retry 조건 평가
+                          ├─ suggest_query / 확장된 sources에 변화 없음 → 그대로 반환
+                          └─ 변화 있음 → news_agent.invoke() 재실행
+                                            │
+                                            ▼ retry 결과가 빈약하면 원본 유지,
+                                              아니면 brief에 "보강했습니다" 메모 추가
+```
+
+비용: 검색당 critic LLM 1회 추가. retry 발생 시 news_agent 전체 한 번 더(브리핑·분석 포함).
+임계값(3)은 보수적 — 실제 retry는 자주 발생하지 않음.
 
 소스별 임계값(`docs/llm-evaluation/retrieval-report.md` 근거):
 - `RELEVANCE_THRESHOLD = 0.15` — naver_api, naver_crawl (이미 키워드 매칭된 결과)

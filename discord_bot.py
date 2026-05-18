@@ -23,8 +23,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app import (  # noqa: E402
-    DEFAULT_SOURCES, build_news_state, client, fetch_geeknews,
-    news_agent, sort_for_display,
+    DEFAULT_SOURCES, client, fetch_geeknews, reflective_news_agent,
+    sort_for_display,
 )
 
 DISCORD_MSG_LIMIT = 2000  # Discord 단일 메시지 글자 수 제한
@@ -145,8 +145,7 @@ async def news_cmd(interaction: discord.Interaction, query: str) -> None:
     await interaction.response.defer(thinking=True)
     try:
         result = await asyncio.to_thread(
-            news_agent.invoke,
-            build_news_state(query, list(DEFAULT_SOURCES), do_summarize=True),
+            reflective_news_agent, query, list(DEFAULT_SOURCES), True,
         )
         answer = _format_news_result(result)
     except Exception:
