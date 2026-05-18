@@ -30,6 +30,15 @@ from openai import OpenAI
 
 load_dotenv()
 
+# `python app.py` 외에 `from app import app`로 띄우는 경우(테스트·gunicorn 등)에도
+# INFO 레벨 로그가 콘솔에 보이도록 모듈 import 시 한 번만 설정. root에 이미 핸들러가
+# 있으면 (예: pytest의 caplog) 손대지 않는다.
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
 log = logging.getLogger("ai_news_summarizer")
 
 app = Flask(__name__)
@@ -833,8 +842,4 @@ def agent_route():
 if __name__ == "__main__":
     # FLASK_DEBUG=1 일 때만 Werkzeug debugger 활성 — 기본은 안전한 production 모드.
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
     app.run(debug=debug, port=5000)
