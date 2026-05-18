@@ -3,11 +3,13 @@ AI 뉴스 크롤링 + OpenAI 요약 웹앱
 실행: python app.py  →  http://localhost:5000
 """
 import json
+import math
 import operator
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import Annotated, TypedDict
 
 import feedparser
@@ -52,22 +54,21 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 EMBED_MODEL = "text-embedding-3-small"
-# 소스별 임계값 — retrieval-report.md 평가 결과 반영
-# naver 계열은 이미 keyword 매칭된 결과라 임계값이 거의 무의미 (0.15가 평균 최적)
-# geeknews는 검색 없이 전체 풀에서 의미로만 선별하므로 더 엄격한 컷(0.25) 필요
+# 임계값 근거는 docs/llm-evaluation/retrieval-report.md 참조.
 RELEVANCE_THRESHOLD = 0.15        # 기본값(naver 등 키워드 검색 기반 소스)
 RELEVANCE_THRESHOLD_RSS = 0.25    # RSS/비검색 소스(geeknews)
 
+# 웹 기본 소스 — discord_bot.py도 이 상수를 import해 사용
+DEFAULT_SOURCES = ["geeknews", "naver_api"]
+
 
 def _cosine(a, b):
-    import math
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
     return dot / (na * nb) if na and nb else 0.0
 
 
-# 자연어 질문 감지용 — 의문어/요청동사 패턴
 _NATURAL_HINT_RE = re.compile(
     r"(어떤|어떻|어때|어디|언제|어느|왜|뭐|무엇|있나|있어|있을까|"
     r"되나|되어|될까|해줘|알려|보여|평가|분석|설명|요약|정리)"
@@ -87,6 +88,7 @@ def _looks_natural(query: str) -> bool:
     return len(q) > 15
 
 
+@lru_cache(maxsize=128)
 @traceable(run_type="chain", name="rewrite_query_for_search")
 def _rewrite_query(query: str) -> tuple[str, str]:
     """자연어 질문이면 LLM으로 검색 키워드를 추출.
@@ -94,7 +96,9 @@ def _rewrite_query(query: str) -> tuple[str, str]:
     Returns: (search_query, semantic_query)
       - search_query: 외부 검색 API/필터에 던질 키워드형 문자열
       - semantic_query: 의미 재랭킹용 — 자연어 의도 그대로 보존
-    짧은 키워드 input은 LLM 호출을 생략해 비용/지연을 절약."""
+    짧은 키워드 input은 LLM 호출을 생략해 비용/지연을 절약.
+    lru_cache로 메모이즈 — LangGraph가 같은 query에 대해 fetch_*를 병렬로 호출해도
+    LLM 호출은 한 번만 발생."""
     q = (query or "").strip()
     if not q or not _looks_natural(q) or client is None:
         return q, q
@@ -124,6 +128,14 @@ def _rewrite_query(query: str) -> tuple[str, str]:
         return q, q
 
 
+def _resolve_queries(query: str, intent: str) -> tuple[str, str]:
+    """fetch_* 함수들이 공통으로 쓰는 (search_query, semantic_query) 결정 로직.
+    intent가 명시되면 검색은 query, 재랭킹은 intent. 없으면 _rewrite_query로 자동 분리."""
+    if intent:
+        return (query or "").strip(), intent.strip()
+    return _rewrite_query(query)
+
+
 @traceable(run_type="chain", name="rank_by_relevance",
            metadata={"model": EMBED_MODEL})
 def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
@@ -134,7 +146,7 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
     if threshold is None:
         threshold = RELEVANCE_THRESHOLD
     q = (query or "").strip()
-    if not q or q.upper() == "AI" or not items or client is None:
+    if not q or q.upper() == "AI" or not items or client is None or len(items) <= 1:
         return items[:top_k]
     texts = []
     for it in items:
@@ -154,15 +166,13 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
 
 
 @traceable(run_type="retriever", name="fetch_geeknews")
-def fetch_geeknews(query: str = "", limit: int = 10, *, intent: str = ""):
+def fetch_geeknews(query: str = "", limit: int = 10, *,
+                   intent: str = "", threshold: float | None = None):
     """GeekNews RSS — 서버측 검색이 없으므로 50건을 받아 임베딩 의미 유사도로 재랭킹.
     query가 비어 있거나 'AI'면 최신 순 그대로.
     intent가 주어지면 그 자연어 문장으로 재랭킹(맥락 매칭). 비어 있으면 query를 자연어로
-    감지해 자동으로 키워드/의도 분리."""
-    if intent:
-        search_q, semantic_q = (query or "").strip(), intent.strip()
-    else:
-        search_q, semantic_q = _rewrite_query(query)
+    감지해 자동으로 키워드/의도 분리. threshold는 RELEVANCE_THRESHOLD_RSS로 기본 설정."""
+    search_q, semantic_q = _resolve_queries(query, intent)
     feed = feedparser.parse("https://news.hada.io/rss/news")
     fetch_pool = 50 if search_q and search_q.upper() != "AI" else limit
     items = []
@@ -174,24 +184,21 @@ def fetch_geeknews(query: str = "", limit: int = 10, *, intent: str = ""):
             "published": entry.get("published", ""),
             "source": "GeekNews",
         })
-    return rank_by_relevance(semantic_q, items, top_k=limit, threshold=RELEVANCE_THRESHOLD_RSS)
+    t = threshold if threshold is not None else RELEVANCE_THRESHOLD_RSS
+    return rank_by_relevance(semantic_q, items, top_k=limit, threshold=t)
 
 
 @traceable(run_type="retriever", name="fetch_naver_api")
-def fetch_naver_api(query="AI", limit=10, *, intent: str = ""):
+def fetch_naver_api(query="AI", limit=10, *,
+                    intent: str = "", threshold: float | None = None):
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        # API 키가 없으면 크롤링으로 자동 폴백
-        return fetch_naver_crawl(query, limit, intent=intent)
-    if intent:
-        search_q, semantic_q = (query or "").strip(), intent.strip()
-    else:
-        search_q, semantic_q = _rewrite_query(query)
+        return fetch_naver_crawl(query, limit, intent=intent, threshold=threshold)
+    search_q, semantic_q = _resolve_queries(query, intent)
     url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
     }
-    # 더 넓은 풀(30건) 받아 임베딩 재랭킹 → 상위 limit건만 반환
     fetch_pool = min(30, max(limit, 10))
     params = {"query": search_q, "display": fetch_pool, "sort": "date"}
     r = requests.get(url, headers=headers, params=params, timeout=10)
@@ -205,18 +212,78 @@ def fetch_naver_api(query="AI", limit=10, *, intent: str = ""):
             "published": item.get("pubDate", ""),
             "source": "네이버 검색 API",
         })
-    return rank_by_relevance(semantic_q, items, top_k=limit)
+    return rank_by_relevance(semantic_q, items, top_k=limit, threshold=threshold)
+
+
+def _parse_naver_sds(soup: BeautifulSoup, fetch_pool: int) -> list[dict]:
+    items: list[dict] = []
+    seen_links: set[str] = set()
+    for span in soup.select("span.sds-comps-text-type-headline1"):
+        a = span.find_parent("a", href=True)
+        if not a:
+            continue
+        href = a.get("href", "")
+        if not href or href in seen_links:
+            continue
+        seen_links.add(href)
+        title = span.get_text(strip=True)
+
+        container = a.parent
+        for _ in range(6):
+            if container is None:
+                break
+            if len(container.select("span.sds-comps-text-type-headline1")) == 1:
+                break
+            container = container.parent
+
+        summary = ""
+        published = ""
+        if container is not None:
+            body1 = container.select_one("span.sds-comps-text-type-body1")
+            if body1:
+                txt = body1.get_text(strip=True)
+                if txt and txt != title:
+                    summary = txt
+            for b2 in container.select("span.sds-comps-text-type-body2"):
+                txt = b2.get_text(strip=True)
+                if txt and ("전" in txt or txt.endswith(".")):
+                    published = txt
+                    break
+
+        items.append({
+            "title": title, "link": href, "summary": summary,
+            "published": published, "source": "네이버 뉴스 크롤링",
+        })
+        if len(items) >= fetch_pool:
+            break
+    return items
+
+
+def _parse_naver_legacy(soup: BeautifulSoup, fetch_pool: int) -> list[dict]:
+    items: list[dict] = []
+    nodes = soup.select("ul.list_news li.bx") or soup.select("div.group_news li")
+    for li in nodes[:fetch_pool]:
+        a = li.select_one("a.news_tit") or li.select_one("a.tit")
+        desc = li.select_one("div.dsc_wrap") or li.select_one("a.api_txt_lines")
+        if not a:
+            continue
+        items.append({
+            "title": a.get("title") or a.get_text(strip=True),
+            "link": a.get("href", ""),
+            "summary": desc.get_text(strip=True) if desc else "",
+            "published": "",
+            "source": "네이버 뉴스 크롤링",
+        })
+    return items
 
 
 @traceable(run_type="retriever", name="fetch_naver_crawl")
-def fetch_naver_crawl(query="AI", limit=10, *, intent: str = ""):
+def fetch_naver_crawl(query="AI", limit=10, *,
+                      intent: str = "", threshold: float | None = None):
     """네이버 뉴스 검색 결과 페이지 파싱 (ToS 주의 - 개인 학습 용도로만).
     최근 2년치만 가져오도록 날짜 범위(nso)를 URL에 추가.
     intent가 있으면 자연어 의도로 재랭킹, 없으면 query를 자동으로 키워드/의도 분리."""
-    if intent:
-        search_q, semantic_q = (query or "").strip(), intent.strip()
-    else:
-        search_q, semantic_q = _rewrite_query(query)
+    search_q, semantic_q = _resolve_queries(query, intent)
     today = date.today()
     two_years_ago = today - timedelta(days=365 * 2)
     ds = two_years_ago.strftime("%Y.%m.%d")
@@ -227,83 +294,22 @@ def fetch_naver_crawl(query="AI", limit=10, *, intent: str = ""):
         "https://search.naver.com/search.naver?where=news"
         f"&query={q_encoded}&sort=1&pd=3&ds={ds}&de={de}&nso={quote(nso, safe=':,')}"
     )
-    # 재랭킹이 의미 있도록 limit보다 큰 풀(최소 20건)을 받아 의미 정렬 후 상위 limit건
+    # 재랭킹이 의미 있도록 limit보다 큰 풀(최소 20건)에서 의미 정렬 후 상위 limit건만
     fetch_pool = max(limit * 3, 20)
     try:
         r = requests.get(url, headers=UA, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        items = []
-
-        # 새 구조 (2025~): sds-comps 디자인 시스템 기반
-        # 각 기사 헤드라인은 span.sds-comps-text-type-headline1, 부모 <a>가 링크
-        # 기사별 컨테이너: 헤드라인 anchor에서 위로 올라가 headline span이 정확히 1개인 가장 작은 div
-        headlines = soup.select("span.sds-comps-text-type-headline1")
-        seen_links = set()
-        for span in headlines:
-            a = span.find_parent("a", href=True)
-            if not a:
-                continue
-            href = a.get("href", "")
-            if not href or href in seen_links:
-                continue
-            seen_links.add(href)
-            title = span.get_text(strip=True)
-
-            # 기사별 컨테이너 찾기 (헤드라인 1개만 포함하는 최소 ancestor)
-            container = a.parent
-            for _ in range(6):
-                if container is None:
-                    break
-                if len(container.select("span.sds-comps-text-type-headline1")) == 1:
-                    break
-                container = container.parent
-
-            summary = ""
-            published = ""
-            if container is not None:
-                # 본문 요약은 body1, 시간/메타는 body2
-                body1 = container.select_one("span.sds-comps-text-type-body1")
-                if body1:
-                    txt = body1.get_text(strip=True)
-                    if txt and txt != title:
-                        summary = txt
-                for b2 in container.select("span.sds-comps-text-type-body2"):
-                    txt = b2.get_text(strip=True)
-                    if txt and ("전" in txt or txt.endswith(".")):
-                        published = txt
-                        break
-
-            items.append({
-                "title": title,
-                "link": href,
-                "summary": summary,
-                "published": published,
-                "source": "네이버 뉴스 크롤링",
-            })
-            if len(items) >= fetch_pool:
-                break
-
-        # 구버전 셀렉터 폴백
+        # 새 구조 (2025~): sds-comps 디자인 시스템. 헤드라인은 span.headline1,
+        # 부모 <a>가 링크. 기사 컨테이너는 headline span을 1개만 포함하는 최소 ancestor.
+        items = _parse_naver_sds(soup, fetch_pool)
         if not items:
-            nodes = soup.select("ul.list_news li.bx") or soup.select("div.group_news li")
-            for li in nodes[:fetch_pool]:
-                a = li.select_one("a.news_tit") or li.select_one("a.tit")
-                desc = li.select_one("div.dsc_wrap") or li.select_one("a.api_txt_lines")
-                if not a:
-                    continue
-                items.append({
-                    "title": a.get("title") or a.get_text(strip=True),
-                    "link": a.get("href", ""),
-                    "summary": desc.get_text(strip=True) if desc else "",
-                    "published": "",
-                    "source": "네이버 뉴스 크롤링",
-                })
+            items = _parse_naver_legacy(soup, fetch_pool)
 
         if not items:
             return [{"title": "(크롤링 결과 없음 - 네이버 페이지 구조 변경 가능성)",
                      "link": "#", "summary": "", "published": "",
                      "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
-        return rank_by_relevance(semantic_q, items, top_k=limit)
+        return rank_by_relevance(semantic_q, items, top_k=limit, threshold=threshold)
     except Exception as e:
         return [{"title": f"(크롤링 실패: {e})", "link": "#", "summary": "",
                  "published": "", "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
@@ -422,33 +428,28 @@ def fetch_naver_crawl_node(state: NewsState):
     return {"items": fetch_naver_crawl(state["query"])}
 
 
+def _merge_analysis(item: dict, result: dict | None) -> dict:
+    """기사 item에 분석 결과(또는 빈 값)를 병합하고 누락 필드를 채운다."""
+    merged = dict(item)
+    if result and "ai_summary" not in merged:
+        merged["ai_summary"] = result["summary"]
+        merged["importance"] = result["importance"]
+        merged["evaluation"] = result["evaluation"]
+    merged.setdefault("ai_summary", "")
+    merged.setdefault("importance", 0)
+    merged.setdefault("evaluation", "")
+    return merged
+
+
 def enrich_node(state: NewsState):
     items = state["items"]
     if not items:
         return {"analyzed": []}
     if not state.get("do_summarize"):
-        analyzed = []
-        for it in items:
-            merged = dict(it)
-            merged.setdefault("ai_summary", "")
-            merged.setdefault("importance", 0)
-            merged.setdefault("evaluation", "")
-            analyzed.append(merged)
-        return {"analyzed": analyzed}
+        return {"analyzed": [_merge_analysis(it, None) for it in items]}
     with ThreadPoolExecutor(max_workers=5) as ex:
         results = list(ex.map(analyze, items))
-    analyzed = []
-    for it, r in zip(items, results):
-        merged = dict(it)
-        if "ai_summary" not in merged:
-            merged["ai_summary"] = r["summary"]
-            merged["importance"] = r["importance"]
-            merged["evaluation"] = r["evaluation"]
-        merged.setdefault("ai_summary", "")
-        merged.setdefault("importance", 0)
-        merged.setdefault("evaluation", "")
-        analyzed.append(merged)
-    return {"analyzed": analyzed}
+    return {"analyzed": [_merge_analysis(it, r) for it, r in zip(items, results)]}
 
 
 def rank_node(state: NewsState):
@@ -488,6 +489,28 @@ def _build_graph():
 
 
 news_agent = _build_graph()
+
+
+def build_news_state(query: str, sources: list[str], do_summarize: bool = True) -> dict:
+    """news_agent.invoke()용 초기 NewsState. Flask 라우트와 Discord 봇이 공유.
+    sources는 방어적으로 복사 — 호출자가 모듈-레벨 상수를 넘기더라도 변형 안전."""
+    return {
+        "query": query,
+        "sources": list(sources),
+        "do_summarize": do_summarize,
+        "items": [],
+        "analyzed": [],
+        "top_picks": [],
+        "brief": "",
+    }
+
+
+def sort_for_display(analyzed: list[dict], top_picks: list[dict]) -> list[dict]:
+    """top_picks를 먼저, 그 다음 importance 내림차순. placeholder('#') 제거."""
+    real = [it for it in analyzed if it.get("link") and it.get("link") != "#"]
+    top_links = {t.get("link") for t in top_picks}
+    real.sort(key=lambda x: (x.get("link") not in top_links, -x.get("importance", 0)))
+    return real
 
 
 # ---------------------------------------------------------------------------
@@ -609,19 +632,11 @@ def index():
     submitted = request.args.get("submitted") == "1"
     sources = request.args.getlist("source")
     if not submitted and not sources:
-        sources = ["geeknews", "naver_api"]
+        sources = list(DEFAULT_SOURCES)
     query = request.args.get("q", "AI")
     do_summarize = request.args.get("summarize") == "1" if submitted else True
 
-    result = news_agent.invoke({
-        "query": query,
-        "sources": sources,
-        "do_summarize": do_summarize,
-        "items": [],
-        "analyzed": [],
-        "top_picks": [],
-        "brief": "",
-    })
+    result = news_agent.invoke(build_news_state(query, sources, do_summarize))
 
     items = list(result.get("analyzed", []))
     top_picks = result.get("top_picks", [])
@@ -697,4 +712,6 @@ def agent_route():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # FLASK_DEBUG=1 일 때만 Werkzeug debugger 활성 — 기본은 안전한 production 모드.
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, port=5000)

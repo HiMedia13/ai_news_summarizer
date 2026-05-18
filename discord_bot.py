@@ -1,5 +1,5 @@
 """
-Discord 봇 - ReAct 뉴스 에이전트를 슬래시 커맨드로 노출.
+Discord 봇 - 웹과 동일한 LangGraph 파이프라인을 슬래시 커맨드로 노출.
 
 실행:
   1. https://discord.com/developers/applications 에서 봇 생성 → Token 복사
@@ -9,10 +9,11 @@ Discord 봇 - ReAct 뉴스 에이전트를 슬래시 커맨드로 노출.
      Permissions: Send Messages, Use Slash Commands)
 
 명령어:
-  /news <질문>       — ReAct 에이전트로 검색·평가·브리핑
+  /news <질문>       — 검색·분석·브리핑 풀 파이프라인 (웹 / 와 동일)
   /headlines        — GeekNews 헤드라인 빠른 조회
 """
 import asyncio
+import logging
 import os
 
 import discord
@@ -21,12 +22,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app import client, fetch_geeknews, news_agent  # noqa: E402
+from app import (  # noqa: E402
+    DEFAULT_SOURCES, build_news_state, client, fetch_geeknews,
+    news_agent, sort_for_display,
+)
 
 DISCORD_MSG_LIMIT = 2000  # Discord 단일 메시지 글자 수 제한
-EMBED_DESC_LIMIT = 4096   # Embed description 제한
-# 웹 흐름과 동일하게 두 소스를 기본 사용 (templates/index.html의 기본 체크박스와 일치)
-DEFAULT_SOURCES = ["geeknews", "naver_api"]
+log = logging.getLogger("discord_bot")
+
+
+def _escape_title(title: str) -> str:
+    """마크다운 링크 안의 `[`/`]`가 파싱을 깨지 않도록 치환."""
+    return (title or "").replace("[", "(").replace("]", ")")
 
 
 def _format_news_result(result: dict) -> str:
@@ -34,12 +41,8 @@ def _format_news_result(result: dict) -> str:
     웹 화면(top_picks 강조 + 전체 목록 + brief)과 동일한 정보 구성."""
     brief = (result.get("brief") or "").strip()
     top_picks = result.get("top_picks") or []
-    analyzed = result.get("analyzed") or []
-
-    # 실제 기사만(placeholder 제외) + importance 내림차순
-    real = [it for it in analyzed if it.get("link") and it.get("link") != "#"]
+    real = sort_for_display(result.get("analyzed") or [], top_picks)
     top_links = {t.get("link") for t in top_picks}
-    real.sort(key=lambda x: (x.get("link") not in top_links, -x.get("importance", 0)))
 
     sections = []
     if brief:
@@ -47,45 +50,63 @@ def _format_news_result(result: dict) -> str:
     if top_picks:
         lines = []
         for t in top_picks:
-            title = t.get("title", "").replace("[", "(").replace("]", ")")
-            link = t.get("link", "")
             imp = t.get("importance", 0)
             evaln = (t.get("evaluation") or "").strip()
-            lines.append(f"- [**{title}**](<{link}>) · 중요도 {imp}/5 — {evaln}")
+            lines.append(
+                f"- [**{_escape_title(t.get('title', ''))}**]"
+                f"(<{t.get('link', '')}>) · 중요도 {imp}/5 — {evaln}"
+            )
         sections.append("**⭐ 주목할 기사**\n" + "\n".join(lines))
-    if real:
+
+    other = [it for it in real if it.get("link") not in top_links]
+    if other:
         lines = []
-        for it in real:
-            if it.get("link") in top_links:
-                continue   # top_picks와 중복 제거
-            title = it.get("title", "").replace("[", "(").replace("]", ")")
-            link = it.get("link", "")
+        for it in other:
             imp = it.get("importance", 0)
             evaln = (it.get("evaluation") or "").strip()
             tail = f" — {evaln}" if evaln else ""
-            lines.append(f"- [{title}](<{link}>) · 중요도 {imp}/5{tail}")
-        if lines:
-            sections.append("**📋 그 외 검색 결과**\n" + "\n".join(lines))
+            lines.append(
+                f"- [{_escape_title(it.get('title', ''))}]"
+                f"(<{it.get('link', '')}>) · 중요도 {imp}/5{tail}"
+            )
+        sections.append("**📋 그 외 검색 결과**\n" + "\n".join(lines))
 
     return "\n\n".join(sections) if sections else "(검색 결과 없음)"
 
 
 def _split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT - 100) -> list[str]:
-    """긴 답변을 Discord 제한에 맞게 분할. 가능하면 빈 줄 경계로 나눔."""
+    """긴 답변을 Discord 제한에 맞게 분할.
+    빈 줄 → 줄 단위 → (최후의 수단으로) 문자 단위 순서로 쪼개,
+    마크다운 링크 `[title](url)` 중간을 자르지 않도록 시도."""
     if len(text) <= limit:
         return [text]
-    chunks, current = [], ""
+    chunks: list[str] = []
+    current = ""
     for paragraph in text.split("\n\n"):
-        if len(current) + len(paragraph) + 2 <= limit:
-            current = f"{current}\n\n{paragraph}" if current else paragraph
-        else:
+        sep = "\n\n" if current else ""
+        if len(current) + len(sep) + len(paragraph) <= limit:
+            current = f"{current}{sep}{paragraph}"
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(paragraph) <= limit:
+            current = paragraph
+            continue
+        # 긴 단락은 줄 단위로 쪼개기 (목록 항목 한 줄은 보통 limit 미만)
+        for line in paragraph.split("\n"):
+            line_sep = "\n" if current else ""
+            if len(current) + len(line_sep) + len(line) <= limit:
+                current = f"{current}{line_sep}{line}"
+                continue
             if current:
                 chunks.append(current)
-            # 한 단락이 limit를 넘으면 강제로 잘라야 함
-            while len(paragraph) > limit:
-                chunks.append(paragraph[:limit])
-                paragraph = paragraph[limit:]
-            current = paragraph
+                current = ""
+            # 한 줄이 limit를 넘는 극단 케이스만 강제 슬라이스
+            while len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+            current = line
     if current:
         chunks.append(current)
     return chunks
@@ -121,30 +142,22 @@ async def news_cmd(interaction: discord.Interaction, query: str) -> None:
         await interaction.response.send_message(
             "OPENAI_API_KEY가 설정되지 않았습니다.", ephemeral=True)
         return
-    # 응답 deferred — Discord는 deferred 후 최대 15분 응답 가능
     await interaction.response.defer(thinking=True)
     try:
-        # 웹 / 라우트와 동일한 입력으로 호출 (geeknews+naver_api, 분석 켬)
         result = await asyncio.to_thread(
             news_agent.invoke,
-            {
-                "query": query,
-                "sources": DEFAULT_SOURCES,
-                "do_summarize": True,
-                "items": [],
-                "analyzed": [],
-                "top_picks": [],
-                "brief": "",
-            },
+            build_news_state(query, list(DEFAULT_SOURCES), do_summarize=True),
         )
         answer = _format_news_result(result)
-    except Exception as e:
-        await interaction.followup.send(f"❌ 에이전트 실행 실패: `{e}`")
+    except Exception:
+        # exception 메시지를 디스코드에 노출하지 않음 (API 키·경로 누출 방지).
+        log.exception("news_cmd 실패 — query=%r", query)
+        await interaction.followup.send(
+            "❌ 에이전트 실행 실패. 봇 콘솔 로그를 확인하세요.")
         return
 
     chunks = _split_chunks(answer)
-    await interaction.followup.send(chunks[0])
-    for chunk in chunks[1:]:
+    for chunk in chunks:
         await interaction.followup.send(chunk)
 
 
@@ -154,20 +167,30 @@ async def news_cmd(interaction: discord.Interaction, query: str) -> None:
 async def headlines_cmd(interaction: discord.Interaction,
                         query: str | None = None) -> None:
     await interaction.response.defer(thinking=True)
-    items = await asyncio.to_thread(fetch_geeknews, query or "", 10)
+    try:
+        items = await asyncio.to_thread(fetch_geeknews, query or "", 10)
+    except Exception:
+        log.exception("headlines_cmd 실패 — query=%r", query)
+        await interaction.followup.send(
+            "❌ GeekNews 조회 실패. 봇 콘솔 로그를 확인하세요.")
+        return
     if not items:
         await interaction.followup.send("(GeekNews 결과 없음)")
         return
-    lines = []
-    for i, it in enumerate(items, 1):
-        title = it.get("title", "").replace("[", "(").replace("]", ")")
-        link = it.get("link", "")
-        lines.append(f"{i}. [{title}](<{link}>)")
-    # `<url>` 형식으로 감싸면 Discord가 임베드 미리보기를 막아 줄 정리됨
+    # `<url>`로 감싸 Discord 임베드 미리보기를 막아 줄 정리
+    lines = [
+        f"{i}. [{_escape_title(it.get('title', ''))}](<{it.get('link', '')}>)"
+        for i, it in enumerate(items, 1)
+    ]
     await interaction.followup.send("\n".join(lines))
 
 
 if __name__ == "__main__":
+    # exception 로그가 콘솔에 출력되도록 root logger 구성.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         raise SystemExit(

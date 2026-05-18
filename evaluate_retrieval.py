@@ -21,7 +21,7 @@ load_dotenv()
 
 from langchain_openai import ChatOpenAI
 
-import app  # rank_by_relevance, fetch_geeknews
+import app
 
 # 토픽 기반 쿼리 — 이전 큐레이션 데이터셋이 못 측정한 영역
 QUERIES = [
@@ -32,14 +32,9 @@ QUERIES = [
     "AI 반도체",
     "오픈소스 라이선스",
 ]
-
-# 평가할 소스 — 'geeknews' (RSS+rank), 'naver_api', 'naver_crawl'
 SOURCES = ["geeknews", "naver_api", "naver_crawl"]
-
-# 비교할 임계값 후보
 THRESHOLDS = [0.15, 0.20, 0.25, 0.30]
-
-TOP_K = 5  # 평가 시 가져올 문서 수
+TOP_K = 5
 
 
 def _build_context(it: dict) -> str:
@@ -71,27 +66,15 @@ async def judge_chunk(judge_llm, query: str, chunk: str) -> int:
 
 
 def _retrieve(source: str, query: str, threshold: float) -> list[dict]:
-    """소스별 retrieval 후 의미 재랭킹 적용.
-
-    app.py가 소스별로 다른 상수를 쓰므로(geeknews → RELEVANCE_THRESHOLD_RSS,
-    그 외 → RELEVANCE_THRESHOLD), 두 상수 모두 동일 threshold로 patch해야
-    평가 시 threshold 변수가 실제로 반영된다."""
-    original_default = app.RELEVANCE_THRESHOLD
-    original_rss = app.RELEVANCE_THRESHOLD_RSS
-    app.RELEVANCE_THRESHOLD = threshold
-    app.RELEVANCE_THRESHOLD_RSS = threshold
-    try:
-        if source == "geeknews":
-            return app.fetch_geeknews(query, limit=TOP_K)
-        elif source == "naver_api":
-            return app.fetch_naver_api(query, limit=TOP_K)
-        elif source == "naver_crawl":
-            return app.fetch_naver_crawl(query, limit=TOP_K)
-        else:
-            return []
-    finally:
-        app.RELEVANCE_THRESHOLD = original_default
-        app.RELEVANCE_THRESHOLD_RSS = original_rss
+    """소스별 retrieval 후 의미 재랭킹 적용. fetch_* 함수의 threshold kwarg를
+    직접 사용해 평가용 임계값을 주입(monkey-patch 불필요)."""
+    if source == "geeknews":
+        return app.fetch_geeknews(query, limit=TOP_K, threshold=threshold)
+    if source == "naver_api":
+        return app.fetch_naver_api(query, limit=TOP_K, threshold=threshold)
+    if source == "naver_crawl":
+        return app.fetch_naver_crawl(query, limit=TOP_K, threshold=threshold)
+    return []
 
 
 async def evaluate_threshold(judge_llm, source: str, query: str,
@@ -197,8 +180,6 @@ async def main() -> None:
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"\n[저장] {out_path}")
-
-    # 자동 업데이트는 하지 않고, 사용자에게 결정 위임
     print(f"\n자동 적용을 원하면 app.py의 RELEVANCE_THRESHOLD를 {best[1]}으로 수정하세요.")
 
 
