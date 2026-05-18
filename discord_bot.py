@@ -21,10 +21,53 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app import react_agent, fetch_geeknews  # noqa: E402
+from app import client, fetch_geeknews, news_agent  # noqa: E402
 
 DISCORD_MSG_LIMIT = 2000  # Discord 단일 메시지 글자 수 제한
 EMBED_DESC_LIMIT = 4096   # Embed description 제한
+# 웹 흐름과 동일하게 두 소스를 기본 사용 (templates/index.html의 기본 체크박스와 일치)
+DEFAULT_SOURCES = ["geeknews", "naver_api"]
+
+
+def _format_news_result(result: dict) -> str:
+    """news_agent 결과를 디스코드용 마크다운 텍스트로 변환.
+    웹 화면(top_picks 강조 + 전체 목록 + brief)과 동일한 정보 구성."""
+    brief = (result.get("brief") or "").strip()
+    top_picks = result.get("top_picks") or []
+    analyzed = result.get("analyzed") or []
+
+    # 실제 기사만(placeholder 제외) + importance 내림차순
+    real = [it for it in analyzed if it.get("link") and it.get("link") != "#"]
+    top_links = {t.get("link") for t in top_picks}
+    real.sort(key=lambda x: (x.get("link") not in top_links, -x.get("importance", 0)))
+
+    sections = []
+    if brief:
+        sections.append(f"**📰 종합 브리핑**\n{brief}")
+    if top_picks:
+        lines = []
+        for t in top_picks:
+            title = t.get("title", "").replace("[", "(").replace("]", ")")
+            link = t.get("link", "")
+            imp = t.get("importance", 0)
+            evaln = (t.get("evaluation") or "").strip()
+            lines.append(f"- [**{title}**](<{link}>) · 중요도 {imp}/5 — {evaln}")
+        sections.append("**⭐ 주목할 기사**\n" + "\n".join(lines))
+    if real:
+        lines = []
+        for it in real:
+            if it.get("link") in top_links:
+                continue   # top_picks와 중복 제거
+            title = it.get("title", "").replace("[", "(").replace("]", ")")
+            link = it.get("link", "")
+            imp = it.get("importance", 0)
+            evaln = (it.get("evaluation") or "").strip()
+            tail = f" — {evaln}" if evaln else ""
+            lines.append(f"- [{title}](<{link}>) · 중요도 {imp}/5{tail}")
+        if lines:
+            sections.append("**📋 그 외 검색 결과**\n" + "\n".join(lines))
+
+    return "\n\n".join(sections) if sections else "(검색 결과 없음)"
 
 
 def _split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT - 100) -> list[str]:
@@ -70,22 +113,31 @@ async def on_ready() -> None:
           f"{[c.name for c in bot.tree.get_commands()]}")
 
 
-@bot.tree.command(name="news", description="AI 뉴스 검색·평가·브리핑 (ReAct 에이전트)")
-@app_commands.describe(query="검색어 또는 자연어 요청 (예: 'AI 반도체 3건 평가해줘')")
+@bot.tree.command(name="news",
+                  description="AI 뉴스 검색·분석·브리핑 (웹과 동일한 LangGraph 파이프라인)")
+@app_commands.describe(query="검색어 (예: 'AI 반도체')")
 async def news_cmd(interaction: discord.Interaction, query: str) -> None:
-    if react_agent is None:
+    if client is None:
         await interaction.response.send_message(
             "OPENAI_API_KEY가 설정되지 않았습니다.", ephemeral=True)
         return
     # 응답 deferred — Discord는 deferred 후 최대 15분 응답 가능
     await interaction.response.defer(thinking=True)
     try:
+        # 웹 / 라우트와 동일한 입력으로 호출 (geeknews+naver_api, 분석 켬)
         result = await asyncio.to_thread(
-            react_agent.invoke,
-            {"messages": [("user", query)]},
-            {"recursion_limit": 25},
+            news_agent.invoke,
+            {
+                "query": query,
+                "sources": DEFAULT_SOURCES,
+                "do_summarize": True,
+                "items": [],
+                "analyzed": [],
+                "top_picks": [],
+                "brief": "",
+            },
         )
-        answer = result["messages"][-1].content or "(빈 응답)"
+        answer = _format_news_result(result)
     except Exception as e:
         await interaction.followup.send(f"❌ 에이전트 실행 실패: `{e}`")
         return
