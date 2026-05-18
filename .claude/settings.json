@@ -3,6 +3,8 @@
     "FLASK_DEBUG": "0"
   },
   "permissions": {
-    "allow": []
+    "allow": [
+      "Bash(git push origin main)"
+    ]
   }
 }
