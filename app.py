@@ -3,6 +3,7 @@ AI 뉴스 크롤링 + OpenAI 요약 웹앱
 실행: python app.py  →  http://localhost:5000
 """
 import json
+import logging
 import math
 import operator
 import os
@@ -28,6 +29,8 @@ from markupsafe import Markup
 from openai import OpenAI
 
 load_dotenv()
+
+log = logging.getLogger("ai_news_summarizer")
 
 app = Flask(__name__)
 
@@ -310,9 +313,11 @@ def fetch_naver_crawl(query="AI", limit=10, *,
                      "link": "#", "summary": "", "published": "",
                      "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
         return rank_by_relevance(semantic_q, items, top_k=limit, threshold=threshold)
-    except Exception as e:
-        return [{"title": f"(크롤링 실패: {e})", "link": "#", "summary": "",
-                 "published": "", "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
+    except Exception:
+        log.exception("fetch_naver_crawl 실패 — query=%r", query)
+        return [{"title": "(크롤링 실패 — 서버 로그 확인)", "link": "#",
+                 "summary": "", "published": "",
+                 "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
 
 
 EMPTY_ANALYSIS = {"summary": "", "importance": 0, "evaluation": ""}
@@ -360,8 +365,10 @@ def analyze(item):
             "importance": importance,
             "evaluation": (data.get("evaluation") or "").strip(),
         }
-    except Exception as e:
-        return {"summary": f"(분석 실패: {e})", "importance": 0, "evaluation": ""}
+    except Exception:
+        log.exception("analyze 실패 — title=%r", title)
+        return {"summary": "(분석 실패 — 서버 로그 확인)",
+                "importance": 0, "evaluation": ""}
 
 
 @traceable(name="brief", run_type="llm")
@@ -388,8 +395,9 @@ def make_brief(top_picks):
             temperature=0.3,
         )
         return resp.choices[0].message.content.strip()
-    except Exception as e:
-        return f"(브리핑 실패: {e})"
+    except Exception:
+        log.exception("make_brief 실패")
+        return "(브리핑 실패 — 서버 로그 확인)"
 
 
 # ---------------------------------------------------------------------------
@@ -704,8 +712,10 @@ def agent_route():
             config={"recursion_limit": 25},
         )
         final_answer, trace = _split_messages(result["messages"])
-    except Exception as e:
-        final_answer = f"(에이전트 실행 실패: {e})"
+    except Exception:
+        # exception 메시지를 사용자에게 노출하지 않음 (API 키·경로 누출 방지).
+        log.exception("/agent 실행 실패 — query=%r", user_query)
+        final_answer = "(에이전트 실행 실패 — 서버 로그를 확인하세요)"
         trace = []
     return render_template("agent.html", final_answer=final_answer, trace=trace,
                            user_query=user_query, available=True)
@@ -714,4 +724,8 @@ def agent_route():
 if __name__ == "__main__":
     # FLASK_DEBUG=1 일 때만 Werkzeug debugger 활성 — 기본은 안전한 production 모드.
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     app.run(debug=debug, port=5000)

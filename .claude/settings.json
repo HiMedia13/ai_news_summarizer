@@ -1,0 +1,8 @@
+{
+  "env": {
+    "FLASK_DEBUG": "0"
+  },
+  "permissions": {
+    "allow": []
+  }
+}
