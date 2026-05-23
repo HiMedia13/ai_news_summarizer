@@ -2,15 +2,20 @@
 AI 뉴스 크롤링 + OpenAI 요약 웹앱
 실행: python app.py  →  http://localhost:5000
 """
+import array
+import hashlib
 import json
 import logging
 import math
 import operator
 import os
 import re
+import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, TypedDict
 
 import feedparser
@@ -69,6 +74,103 @@ EMBED_MODEL = "text-embedding-3-small"
 # 임계값 근거는 docs/llm-evaluation/retrieval-report.md 참조.
 RELEVANCE_THRESHOLD = 0.15        # 기본값(naver 등 키워드 검색 기반 소스)
 RELEVANCE_THRESHOLD_RSS = 0.25    # RSS/비검색 소스(geeknews)
+
+# ---------------------------------------------------------------------------
+# Embedding cache (SQLite) — (text_hash, model) → embedding BLOB.
+# 같은 기사/쿼리가 다시 나오면 OpenAI 호출을 건너뛴다.
+# ---------------------------------------------------------------------------
+EMBED_CACHE_PATH = Path(os.getenv("EMBED_CACHE_PATH", ".cache/embeddings.sqlite"))
+_embed_db_lock = threading.Lock()
+_embed_db_ready = False
+
+
+def _embed_db_conn() -> sqlite3.Connection:
+    """Lazy init: 디렉토리·테이블·WAL을 한 번만 셋업하고 연결을 돌려준다."""
+    global _embed_db_ready
+    if not _embed_db_ready:
+        with _embed_db_lock:
+            if not _embed_db_ready:
+                EMBED_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(EMBED_CACHE_PATH, check_same_thread=False)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS embedding_cache (
+                        text_hash TEXT NOT NULL,
+                        model     TEXT NOT NULL,
+                        embedding BLOB NOT NULL,
+                        created_at REAL NOT NULL DEFAULT (unixepoch()),
+                        PRIMARY KEY (text_hash, model)
+                    )
+                """)
+                conn.commit()
+                conn.close()
+                _embed_db_ready = True
+    return sqlite3.connect(EMBED_CACHE_PATH, check_same_thread=False)
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _emb_to_blob(emb) -> bytes:
+    return array.array("f", emb).tobytes()
+
+
+def _blob_to_emb(blob: bytes) -> list[float]:
+    return array.array("f", blob).tolist()
+
+
+def _load_cached_embeddings(hashes: list[str], model: str) -> dict[str, list[float]]:
+    if not hashes:
+        return {}
+    conn = _embed_db_conn()
+    try:
+        placeholders = ",".join("?" * len(hashes))
+        rows = conn.execute(
+            f"SELECT text_hash, embedding FROM embedding_cache "
+            f"WHERE model = ? AND text_hash IN ({placeholders})",
+            [model, *hashes],
+        ).fetchall()
+        return {h: _blob_to_emb(b) for h, b in rows}
+    finally:
+        conn.close()
+
+
+def _store_cached_embeddings(items: list[tuple[str, list[float]]], model: str) -> None:
+    if not items:
+        return
+    conn = _embed_db_conn()
+    try:
+        with _embed_db_lock:
+            conn.executemany(
+                "INSERT OR REPLACE INTO embedding_cache (text_hash, model, embedding) "
+                "VALUES (?, ?, ?)",
+                [(h, model, _emb_to_blob(e)) for h, e in items],
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+@traceable(run_type="embedding", name="embed_batch",
+           metadata={"model": EMBED_MODEL})
+def embed_batch(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
+    """텍스트 리스트 → 임베딩 리스트. 캐시에 있는 건 재사용, 없는 것만 OpenAI 호출."""
+    if not texts or client is None:
+        return []
+    hashes = [_hash_text(t) for t in texts]
+    cached = _load_cached_embeddings(list(set(hashes)), model)
+    missing_idx = [i for i, h in enumerate(hashes) if h not in cached]
+    if missing_idx:
+        missing_texts = [texts[i] for i in missing_idx]
+        resp = client.embeddings.create(model=model, input=missing_texts)
+        new_embs = [d.embedding for d in resp.data]
+        to_store = []
+        for idx, emb in zip(missing_idx, new_embs):
+            cached[hashes[idx]] = emb
+            to_store.append((hashes[idx], emb))
+        _store_cached_embeddings(to_store, model)
+    return [cached[h] for h in hashes]
 
 # 웹 기본 소스 — discord_bot.py도 이 상수를 import해 사용
 DEFAULT_SOURCES = ["geeknews", "naver_api"]
@@ -166,9 +268,10 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
         summary = (it.get("summary") or "")[:300]
         texts.append(f"{title}\n{summary}".strip())
     try:
-        resp = client.embeddings.create(model=EMBED_MODEL, input=[q] + texts)
-        q_emb = resp.data[0].embedding
-        item_embs = [d.embedding for d in resp.data[1:]]
+        embs = embed_batch([q] + texts)
+        if not embs:
+            return items[:top_k]
+        q_emb, item_embs = embs[0], embs[1:]
         scored = [(it, _cosine(q_emb, emb)) for it, emb in zip(items, item_embs)]
         scored.sort(key=lambda x: x[1], reverse=True)
         ranked = [it for it, s in scored if s >= threshold]
@@ -177,27 +280,60 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
         return items[:top_k]
 
 
-@traceable(run_type="retriever", name="fetch_geeknews")
-def fetch_geeknews(query: str = "", limit: int = 10, *,
-                   intent: str = "", threshold: float | None = None):
-    """GeekNews RSS — 서버측 검색이 없으므로 50건을 받아 임베딩 의미 유사도로 재랭킹.
-    query가 비어 있거나 'AI'면 최신 순 그대로.
-    intent가 주어지면 그 자연어 문장으로 재랭킹(맥락 매칭). 비어 있으면 query를 자연어로
-    감지해 자동으로 키워드/의도 분리. threshold는 RELEVANCE_THRESHOLD_RSS로 기본 설정."""
+def _fetch_rss(rss_url: str, source_label: str,
+               query: str, limit: int,
+               *, intent: str = "",
+               threshold: float | None = None) -> list[dict]:
+    """RSS 피드용 공용 retriever. 서버측 검색이 없으므로 최신 50건을 받아
+    임베딩 의미 유사도로 재랭킹. query가 비어 있거나 'AI'면 최신 순 그대로."""
     search_q, semantic_q = _resolve_queries(query, intent)
-    feed = feedparser.parse("https://news.hada.io/rss/news")
+    feed = feedparser.parse(rss_url)
     fetch_pool = 50 if search_q and search_q.upper() != "AI" else limit
     items = []
     for entry in feed.entries[:fetch_pool]:
         items.append({
-            "title": entry.title,
-            "link": entry.link,
-            "summary": BeautifulSoup(entry.get("summary", ""), "html.parser").get_text()[:500],
+            "title": entry.get("title", ""),
+            "link": entry.get("link", ""),
+            "summary": BeautifulSoup(
+                entry.get("summary", ""), "html.parser",
+            ).get_text()[:500],
             "published": entry.get("published", ""),
-            "source": "GeekNews",
+            "source": source_label,
         })
     t = threshold if threshold is not None else RELEVANCE_THRESHOLD_RSS
     return rank_by_relevance(semantic_q, items, top_k=limit, threshold=t)
+
+
+@traceable(run_type="retriever", name="fetch_geeknews")
+def fetch_geeknews(query: str = "", limit: int = 10, *,
+                   intent: str = "", threshold: float | None = None):
+    """GeekNews RSS (한국 IT/해커뉴스 큐레이션)."""
+    return _fetch_rss(
+        "https://news.hada.io/rss/news", "GeekNews",
+        query, limit, intent=intent, threshold=threshold,
+    )
+
+
+@traceable(run_type="retriever", name="fetch_techcrunch_ai")
+def fetch_techcrunch_ai(query: str = "", limit: int = 10, *,
+                        intent: str = "", threshold: float | None = None):
+    """TechCrunch AI 카테고리 RSS (영문 AI/스타트업 산업 뉴스)."""
+    return _fetch_rss(
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "TechCrunch AI",
+        query, limit, intent=intent, threshold=threshold,
+    )
+
+
+@traceable(run_type="retriever", name="fetch_venturebeat_ai")
+def fetch_venturebeat_ai(query: str = "", limit: int = 10, *,
+                         intent: str = "", threshold: float | None = None):
+    """VentureBeat AI 카테고리 RSS (영문 AI 비즈니스·산업 분석)."""
+    return _fetch_rss(
+        "https://venturebeat.com/category/ai/feed",
+        "VentureBeat AI",
+        query, limit, intent=intent, threshold=threshold,
+    )
 
 
 @traceable(run_type="retriever", name="fetch_naver_api")
@@ -412,7 +548,10 @@ def make_brief(top_picks):
 # ---------------------------------------------------------------------------
 # Self-RAG: critique + source fallback + retry
 # ---------------------------------------------------------------------------
-_FALLBACK_CHAIN = ["geeknews", "naver_api", "naver_crawl"]
+_FALLBACK_CHAIN = [
+    "geeknews", "naver_api", "naver_crawl",
+    "techcrunch_ai", "venturebeat_ai",
+]
 
 
 def expand_sources(sources: list[str]) -> list[str]:
@@ -484,14 +623,18 @@ class NewsState(TypedDict):
     brief: str
 
 
+_SOURCE_TO_NODE = {
+    "geeknews":     "fetch_geeknews_node",
+    "naver_api":    "fetch_naver_api_node",
+    "naver_crawl":  "fetch_naver_crawl_node",
+    "techcrunch_ai": "fetch_techcrunch_ai_node",
+    "venturebeat_ai": "fetch_venturebeat_ai_node",
+}
+
+
 def route_sources(state: NewsState):
-    targets = []
-    if "geeknews" in state["sources"]:
-        targets.append("fetch_geeknews_node")
-    if "naver_api" in state["sources"]:
-        targets.append("fetch_naver_api_node")
-    if "naver_crawl" in state["sources"]:
-        targets.append("fetch_naver_crawl_node")
+    targets = [_SOURCE_TO_NODE[s] for s in state["sources"]
+               if s in _SOURCE_TO_NODE]
     return targets or ["enrich_node"]
 
 
@@ -505,6 +648,14 @@ def fetch_naver_api_node(state: NewsState):
 
 def fetch_naver_crawl_node(state: NewsState):
     return {"items": fetch_naver_crawl(state["query"])}
+
+
+def fetch_techcrunch_ai_node(state: NewsState):
+    return {"items": fetch_techcrunch_ai(state.get("query", ""))}
+
+
+def fetch_venturebeat_ai_node(state: NewsState):
+    return {"items": fetch_venturebeat_ai(state.get("query", ""))}
 
 
 def _merge_analysis(item: dict, result: dict | None) -> dict:
@@ -546,21 +697,24 @@ def brief_node(state: NewsState):
 
 def _build_graph():
     g = StateGraph(NewsState)
-    g.add_node("fetch_geeknews_node", fetch_geeknews_node)
-    g.add_node("fetch_naver_api_node", fetch_naver_api_node)
-    g.add_node("fetch_naver_crawl_node", fetch_naver_crawl_node)
+    fetch_nodes = {
+        "fetch_geeknews_node": fetch_geeknews_node,
+        "fetch_naver_api_node": fetch_naver_api_node,
+        "fetch_naver_crawl_node": fetch_naver_crawl_node,
+        "fetch_techcrunch_ai_node": fetch_techcrunch_ai_node,
+        "fetch_venturebeat_ai_node": fetch_venturebeat_ai_node,
+    }
+    for name, fn in fetch_nodes.items():
+        g.add_node(name, fn)
     g.add_node("enrich_node", enrich_node)
     g.add_node("rank_node", rank_node)
     g.add_node("brief_node", brief_node)
     g.add_conditional_edges(
-        START,
-        route_sources,
-        ["fetch_geeknews_node", "fetch_naver_api_node",
-         "fetch_naver_crawl_node", "enrich_node"],
+        START, route_sources,
+        list(fetch_nodes) + ["enrich_node"],
     )
-    g.add_edge("fetch_geeknews_node", "enrich_node")
-    g.add_edge("fetch_naver_api_node", "enrich_node")
-    g.add_edge("fetch_naver_crawl_node", "enrich_node")
+    for name in fetch_nodes:
+        g.add_edge(name, "enrich_node")
     g.add_edge("enrich_node", "rank_node")
     g.add_edge("rank_node", "brief_node")
     g.add_edge("brief_node", END)
@@ -642,25 +796,33 @@ def reflective_news_agent(query: str, sources: list[str],
 # ---------------------------------------------------------------------------
 # ReAct 에이전트 (LLM이 도구 호출을 스스로 결정)
 # ---------------------------------------------------------------------------
+_TOOL_SOURCE_DISPATCH = {
+    "naver": fetch_naver_api,
+    "naver_api": fetch_naver_api,
+    "naver_crawl": fetch_naver_crawl,
+    "geeknews": fetch_geeknews,
+    "techcrunch_ai": fetch_techcrunch_ai,
+    "venturebeat_ai": fetch_venturebeat_ai,
+}
+
+
 @tool
 def search_news(source: str = "geeknews", query: str = "AI", intent: str = "") -> str:
     """뉴스 검색 도구.
     source 옵션:
-      - 'geeknews'    : GeekNews RSS (query로 클라이언트 필터링)
-      - 'naver'       : 네이버 검색 API (키 없으면 자동으로 크롤링 폴백)
-      - 'naver_crawl' : 네이버 뉴스 검색 페이지 크롤링 (최근 2년 한정)
+      - 'geeknews'       : GeekNews RSS (한국 IT/해커뉴스 큐레이션)
+      - 'naver' / 'naver_api' : 네이버 검색 API (키 없으면 자동으로 크롤링 폴백)
+      - 'naver_crawl'    : 네이버 뉴스 검색 페이지 크롤링 (최근 2년 한정)
+      - 'techcrunch_ai'  : TechCrunch AI 카테고리 RSS (영문 AI/스타트업)
+      - 'venturebeat_ai' : VentureBeat AI 카테고리 RSS (영문 AI 비즈니스·산업 분석)
     인자:
       - query : 검색 API에 던질 핵심 키워드(공백 구분). 예: "AI 반도체 엔비디아"
       - intent: (선택) 사용자가 알고 싶은 맥락을 자연어 한 문장으로.
                 의미 재랭킹에 사용되어, 키워드 매칭만으로는 잡히지 않는
                 문맥적 관련성을 확보. 비워두면 query가 사용됨.
     검색된 기사들의 번호/제목/요약/출처를 텍스트로 반환."""
-    if source == "naver":
-        items = fetch_naver_api(query, intent=intent)
-    elif source == "naver_crawl":
-        items = fetch_naver_crawl(query, intent=intent)
-    else:
-        items = fetch_geeknews(query, intent=intent)
+    fetcher = _TOOL_SOURCE_DISPATCH.get(source, fetch_geeknews)
+    items = fetcher(query, intent=intent)
     if not items:
         return "(검색 결과 없음)"
     lines = []
@@ -693,15 +855,21 @@ def compose_brief(headlines_with_scores: str) -> str:
 _REACT_PROMPT = (
     "당신은 한국어 뉴스 큐레이션 에이전트입니다.\n\n"
     "## 도구\n"
-    "- search_news(source, query, intent): source는 'geeknews' | 'naver' | 'naver_crawl'.\n"
+    "- search_news(source, query, intent): source는 "
+    "'geeknews' | 'naver' | 'naver_crawl' | 'techcrunch_ai' | 'venturebeat_ai'.\n"
     "    * **query**: 검색 API에 던질 핵심 키워드만(공백 구분). 예: 'AI 반도체 엔비디아'.\n"
     "      자연어 문장이나 의문어·조사를 절대 query에 넣지 말 것.\n"
     "    * **intent**: 사용자가 알고 싶은 맥락을 **원본 자연어 한 문장**으로 그대로 전달.\n"
     "      예: '엔비디아의 AI 반도체 시장 위치와 최근 동향'. 의미 재랭킹에 쓰여,\n"
     "      키워드만으로는 잡히지 않는 문맥적 관련성을 확보.\n"
-    "    * **키워드 검색(예: 'AI 반도체', 'GPT', '메타버스')**: 'geeknews'와 'naver' "
-    "**두 소스를 모두 호출**해 IT 해커뉴스와 한국 일반 뉴스를 함께 수집. "
-    "'naver' 결과가 부족하면 'naver_crawl'로 보강.\n"
+    "    * 소스 선택 가이드:\n"
+    "      - 'geeknews': 한국 IT/해커뉴스 큐레이션\n"
+    "      - 'naver' / 'naver_crawl': 한국 일반 뉴스(국내 동향·기업 소식)\n"
+    "      - 'techcrunch_ai' / 'venturebeat_ai': **영문 AI/산업 분석** "
+    "(특히 OpenAI·엔비디아·해외 스타트업·시장 분석은 이 두 소스가 강함)\n"
+    "    * **키워드 검색(예: 'AI 반도체', 'GPT', '메타버스')**: 한국·영문 양쪽 다 수집. "
+    "한국 토픽이면 'geeknews'+'naver', 글로벌 AI 토픽이면 'techcrunch_ai'+'venturebeat_ai'를 "
+    "함께 호출. **국제 산업 분석 요청**이면 'techcrunch_ai'+'venturebeat_ai'+'geeknews' 3개 호출.\n"
     "    * 사용자가 'GeekNews만'·'네이버만'처럼 **소스를 단일하게 지정**한 경우에만 그 하나만 호출.\n"
     "    * 사용자가 키워드 없이 '오늘 뉴스', 'IT 헤드라인' 같이 요청하면 'geeknews'만으로 충분.\n"
     "- rate_article(title, content): 단일 기사 중요도(1~5) + 한 줄 평가\n"

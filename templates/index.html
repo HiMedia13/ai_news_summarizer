@@ -195,6 +195,14 @@
               {% if 'naver_crawl' in sources %}checked{% endif %}> 네이버 크롤링
           </label>
           <label class="check">
+            <input type="checkbox" name="source" value="techcrunch_ai"
+              {% if 'techcrunch_ai' in sources %}checked{% endif %}> TechCrunch AI
+          </label>
+          <label class="check">
+            <input type="checkbox" name="source" value="venturebeat_ai"
+              {% if 'venturebeat_ai' in sources %}checked{% endif %}> VentureBeat AI
+          </label>
+          <label class="check">
             <input type="checkbox" name="summarize" value="1"
               {% if do_summarize %}checked{% endif %}> AI 요약 사용
           </label>
