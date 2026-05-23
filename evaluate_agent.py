@@ -89,7 +89,8 @@ def run_agent(inputs: dict) -> dict:
     )
     tools_used = []
     retrieval_chunks = []
-    for m in result["messages"]:
+    messages = result.get("messages") or []
+    for m in messages:
         if getattr(m, "type", "") == "ai":
             for tc in getattr(m, "tool_calls", None) or []:
                 tools_used.append(tc.get("name", ""))
@@ -98,9 +99,12 @@ def run_agent(inputs: dict) -> dict:
             if getattr(m, "name", "") == "search_news":
                 content = m.content if isinstance(m.content, str) else str(m.content)
                 retrieval_chunks.append(content)
-    final = result["messages"][-1]
+    if not messages:
+        log.warning("run_agent: react_agent가 빈 messages 반환 — query=%r", inputs.get("q"))
+        return {"answer": "", "tools_used": [], "retrieval": ""}
+    final = messages[-1]
     return {
-        "answer": final.content,
+        "answer": getattr(final, "content", "") or "",
         "tools_used": tools_used,
         "retrieval": "\n\n".join(retrieval_chunks),
     }
@@ -249,7 +253,13 @@ def contextual_relevancy(outputs: dict, inputs: dict) -> dict:
 
 
 def main():
-    client = Client()
+    try:
+        client = Client()
+    except Exception as e:
+        raise SystemExit(
+            "LangSmith Client 초기화 실패. LANGSMITH_API_KEY가 .env에 있는지 "
+            f"확인하세요.\n원인: {e}"
+        ) from e
     dataset_name = ensure_dataset(client)
 
     print(f"\n[evaluate] '{dataset_name}' 에 ReAct 에이전트 실행 + judge({JUDGE_MODEL}) 채점 중...")

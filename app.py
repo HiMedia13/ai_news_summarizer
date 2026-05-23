@@ -252,6 +252,7 @@ def _rewrite_query(query: str) -> tuple[str, str]:
         kw = (resp.choices[0].message.content or "").strip().strip('"\'')
         return (kw if kw else q), q
     except Exception:
+        log.exception("_rewrite_query 실패 — query=%r", q)
         return q, q
 
 
