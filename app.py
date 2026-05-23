@@ -161,6 +161,14 @@ def _store_cached_embeddings(items: list[tuple[str, list[float]]], model: str) -
                 "VALUES (?, ?, ?)",
                 [(h, model, _emb_to_blob(e)) for h, e in items],
             )
+            # Lazy purge: TTL이 켜져 있으면 만료된 row를 같은 트랜잭션에서 청소.
+            # 별도 스케줄러 없이 새 임베딩이 들어올 때마다 자연스럽게 줄어든다.
+            if EMBED_CACHE_TTL_DAYS > 0:
+                conn.execute(
+                    "DELETE FROM embedding_cache "
+                    "WHERE created_at < unixepoch() - (? * 86400)",
+                    (EMBED_CACHE_TTL_DAYS,),
+                )
             conn.commit()
     finally:
         conn.close()
@@ -315,7 +323,18 @@ def _fetch_rss(rss_url: str, source_label: str,
             "source": source_label,
         })
     t = threshold if threshold is not None else RELEVANCE_THRESHOLD_RSS
-    return rank_by_relevance(semantic_q, items, top_k=limit, threshold=t)
+    ranked = rank_by_relevance(semantic_q, items, top_k=limit, threshold=t)
+    # 폴백: 자연어 intent 등으로 의미 점수가 threshold를 못 넘겨 결과가 적을 때
+    # RSS 원본 순서(최신순)로 부족분을 채워 limit을 보장.
+    if len(ranked) < limit:
+        seen = {it.get("link") for it in ranked}
+        for it in items:
+            if it.get("link") not in seen:
+                ranked.append(it)
+                seen.add(it.get("link"))
+                if len(ranked) >= limit:
+                    break
+    return ranked
 
 
 @traceable(run_type="retriever", name="fetch_geeknews")
@@ -568,7 +587,12 @@ def analyze(item):
                  "당신은 한국어 뉴스 분석 전문가입니다. 주어진 뉴스를 분석해 JSON으로 응답하세요.\n"
                  "필드:\n"
                  '- "summary": 핵심을 2~3문장으로 요약 (추측/부연 금지)\n'
-                 '- "importance": 1~5 정수 점수. 1=가십·단순 동향, 3=업계 관심사, 5=산업/사회에 큰 영향\n'
+                 '- "importance": 1~5 정수. 산업·사회 임팩트 기준 5단계 앵커 (importance-golden.json과 동기화):\n'
+                 "    1 = 가십·단순 동향 (인물 SNS, 사옥 인테리어 등 의사결정 무관)\n"
+                 "    2 = 좁은 관심사·점진 업데이트 (마이너 패치, 단축키 추가, UX 미세 조정)\n"
+                 "    3 = 업계 관심사 (실무자 도구 메이저 업데이트, 라이브러리 출시)\n"
+                 "    4 = 업계 광범위 임팩트 (빅테크 제품 출시, 가격 정책 변화, 핵심 인프라 변경)\n"
+                 "    5 = 산업·사회에 큰 영향 (파운데이션 모델 출시, 규제 시행, 칩 세대 교체)\n"
                  '- "evaluation": 그 점수를 매긴 이유를 한 줄(40자 이내)로 설명'
              )},
             {"role": "user", "content": f"제목: {title}\n\n내용: {text}"},
@@ -932,6 +956,9 @@ _REACT_PROMPT = (
     "함께 호출. **국제 산업 분석 요청**이면 'techcrunch_ai'+'venturebeat_ai'+'geeknews' 3개 호출.\n"
     "    * 사용자가 'GeekNews만'·'네이버만'처럼 **소스를 단일하게 지정**한 경우에만 그 하나만 호출.\n"
     "    * 사용자가 키워드 없이 '오늘 뉴스', 'IT 헤드라인' 같이 요청하면 'geeknews'만으로 충분.\n"
+    "    * **특정 토픽이 없는 요청**('오늘 헤드라인', '중요뉴스 N건', '최신 뉴스' 등)은 "
+    "**`query`·`intent` 둘 다 빈 문자열('')**로 호출. 의미 재랭킹을 건너뛰고 RSS 원본 "
+    "최신순으로 N건을 받게 됨. '오늘'·'중요'·'헤드라인' 같은 메타어를 query/intent에 넣지 말 것.\n"
     "- rate_article(title, content): 단일 기사 중요도(1~5) + 한 줄 평가\n"
     "- compose_brief(headlines_with_scores): 여러 기사 종합 브리핑 — "
     "사용자가 '브리핑/종합/요약해서 알려줘'를 요청하면 **반드시 호출**.\n\n"
@@ -989,6 +1016,15 @@ def index():
         sources = list(DEFAULT_SOURCES)
     query = request.args.get("q", "AI")
     do_summarize = request.args.get("summarize") == "1" if submitted else True
+
+    # 첫 진입(submitted=False)에는 검색을 자동 실행하지 않는다.
+    # 자동 검색은 query="AI"+Self-RAG retry로 LLM을 2회 소모하기 때문.
+    if not submitted:
+        return render_template(
+            "index.html",
+            items=[], sources=sources, query=query,
+            do_summarize=do_summarize, brief="", top_picks=[],
+        )
 
     result = reflective_news_agent(query, sources, do_summarize)
 

@@ -63,7 +63,8 @@ critique_results            ── critic LLM(gpt-4o-mini)이 1~5점 채점
 - `python app.py` — 웹 (debug는 `FLASK_DEBUG=1`로만 활성)
 - `python discord_bot.py` — 봇 (`.env`의 `DISCORD_BOT_TOKEN` 필수)
 - `python evaluate_retrieval.py` — retrieval 평가
-- `python -c "import app; import discord_bot; import evaluate_retrieval; print('OK')"` — 변경 후 빠른 검증
+- `python evaluate_importance.py` — importance(1~5) 채점 정확도 평가. 골든셋(`importance-golden.json`)과 LLM-judge(gpt-4o)로 `app.analyze` 결과 비교.
+- `python -c "import app; import discord_bot; import evaluate_retrieval; import evaluate_importance; print('OK')"` — 변경 후 빠른 검증
 
 또는 동등한 slash command: `/runweb`, `/runbot`, `/check-imports`, `/eval-retrieval` (`.claude/skills/` 참조).
 
@@ -85,4 +86,6 @@ critique_results            ── critic LLM(gpt-4o-mini)이 1~5점 채점
 ## 평가 정책
 
 - retrieval 임계값을 자동으로 코드에 적용하지 말 것. 평균 precision이 약간 더 높아도 recall 손실이 클 수 있어 사용자 판단 필요.
+- importance 채점 프롬프트(`app.analyze`의 system 메시지)와 골든셋(`importance-golden.json`)의 rubric은 **수동으로 동기화**할 것. 골든셋 정답에 맞춰 프롬프트를 자동 튜닝하면 과적합되어 실제 뉴스에서 분포가 무너짐.
+- 골든셋은 사용자 판단 정답이므로 자동 라벨링 금지. 모델 출력으로 정답을 덮어쓰면 평가 의미가 사라짐.
 - Discord 봇과 웹의 결과 차이는 2026-05 이후 동일 파이프라인으로 통일됨. 단, ReAct(`/agent`)는 별도 흐름이라 차이가 의도된 것.

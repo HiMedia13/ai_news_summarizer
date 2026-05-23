@@ -1,0 +1,223 @@
+{
+  "version": 1,
+  "purpose": "app.analyze()의 importance(1~5) 채점 정확도 평가용 시드 골든셋. 사람이 직접 라벨링한 정답 셋. 사용자가 자유롭게 추가·수정.",
+  "rubric": {
+    "1": "가십·단순 동향 — 인물 SNS, 사옥 인테리어 등 의사결정에 영향 없는 화제",
+    "2": "좁은 관심사·점진 업데이트 — 특정 도구의 미세 개선, 단축키 추가",
+    "3": "업계 관심사 — 실무자 도구 메이저 업데이트, 새 라이브러리 출시",
+    "4": "업계 광범위 임팩트 — 빅테크 제품 출시, 가격 정책 변화, 핵심 인프라 변경",
+    "5": "산업·사회에 큰 영향 — 파운데이션 모델 출시, 규제 시행, 칩 아키텍처 세대 교체"
+  },
+  "items": [
+    {
+      "id": "g01",
+      "title": "OpenAI, GPT-5 정식 출시 — 추론·코딩 벤치마크 전 영역 SOTA 갱신",
+      "summary": "OpenAI가 GPT-5를 일반 공개. MMLU, HumanEval, GSM8K 등 주요 벤치마크에서 GPT-4 대비 큰 폭의 향상을 보였으며 멀티모달 추론과 도구 사용 능력이 강화됨. API 가격은 GPT-4 동등.",
+      "expected_importance": 5,
+      "rationale": "전 세계 AI 산업·연구·서비스 전반에 직접 영향"
+    },
+    {
+      "id": "g02",
+      "title": "EU AI Act 정식 시행 — 범용 AI 모델 투명성·안전성 의무 부과",
+      "summary": "유럽연합 AI 법이 발효되며 GPT-4·Gemini 등 범용 AI 모델 제공자는 학습 데이터 요약 공개, 안전 평가 보고서 제출, 저작권 준수 의무를 짊어진다. 위반 시 글로벌 매출의 최대 3% 과징금.",
+      "expected_importance": 5,
+      "rationale": "글로벌 AI 규제 표준 — 모든 사업자 직접 영향"
+    },
+    {
+      "id": "g03",
+      "title": "엔비디아, 차세대 Rubin GPU 아키텍처 발표 — 트랜지스터 밀도 2배",
+      "summary": "엔비디아가 Blackwell 후속인 Rubin 아키텍처를 공식 공개. TSMC 2nm 공정 기반으로 트랜지스터 밀도가 2배 증가했고 HBM4 메모리를 채택. 2027년 양산 예정.",
+      "expected_importance": 5,
+      "rationale": "AI 인프라 세대 교체 — 학습·추론 비용 구조 재편"
+    },
+    {
+      "id": "g04",
+      "title": "Anthropic, Claude API 가격 50% 인하 — OpenAI 추격 본격화",
+      "summary": "Anthropic이 Claude 3.5 Sonnet과 Haiku의 API 토큰당 가격을 절반으로 인하한다고 발표. 주요 모델 호환 SDK도 함께 업데이트.",
+      "expected_importance": 4,
+      "rationale": "LLM API 가격 경쟁 — 전 산업 도입 비용 영향"
+    },
+    {
+      "id": "g05",
+      "title": "GitHub Copilot 무료 플랜 전면 확대 — 학생·OSS 기여자 무제한",
+      "summary": "GitHub가 Copilot 무료 플랜의 사용량 제한을 폐지. 학생 인증 및 활성 오픈소스 메인테이너에게 무제한 사용권을 부여한다고 발표.",
+      "expected_importance": 4,
+      "rationale": "전 세계 개발자 접근성 — 코드 생성 도구 보편화 가속"
+    },
+    {
+      "id": "g06",
+      "title": "Apple M5 칩 발표 — 온디바이스 LLM 추론 속도 3배",
+      "summary": "Apple이 M5 칩을 공개. Neural Engine이 38 TOPS에서 105 TOPS로 강화되어 7B 파라미터 LLM도 로컬 실시간 추론이 가능하다고 시연.",
+      "expected_importance": 4,
+      "rationale": "온디바이스 AI 보편화 — 프라이버시·클라우드 비용 구조 변화"
+    },
+    {
+      "id": "g07",
+      "title": "Pinecone, 새 인덱스 알고리즘 발표 — RAG 응답속도 30% 단축",
+      "summary": "Pinecone이 'TurboIndex' 알고리즘을 공개. 동일 정확도에서 쿼리 응답 지연을 30% 단축했다고 벤치마크 결과 발표. 기존 사용자는 무료 마이그레이션 지원.",
+      "expected_importance": 3,
+      "rationale": "벡터 DB 실무자 도구 — 응용 개발자에게 직접 가치"
+    },
+    {
+      "id": "g08",
+      "title": "LangChain 0.4 출시 — 콜백 API 개편과 새 메모리 모듈",
+      "summary": "LangChain이 0.4 마이너 릴리스를 공개. 콜백 시스템이 비동기 우선으로 재설계됐고 ConversationMemory가 LangGraph Checkpoint와 통합. 마이그레이션 가이드 동봉.",
+      "expected_importance": 3,
+      "rationale": "LLM 앱 개발자 핵심 라이브러리 — 마이그레이션 필요"
+    },
+    {
+      "id": "g09",
+      "title": "Hugging Face, 한국어 LLM 리더보드 별도 트랙 신설",
+      "summary": "Hugging Face Open LLM Leaderboard에 한국어 평가 별도 트랙이 추가됨. KMMLU, Hae-Rae Bench 등 5개 벤치마크로 한국어 모델을 별도 순위로 표시.",
+      "expected_importance": 3,
+      "rationale": "한국어 NLP 연구자·실무자에게 표준 평가 채널 추가"
+    },
+    {
+      "id": "g10",
+      "title": "VSCode 1.99 출시 — 사이드바 UI 미세 조정과 단축키 추가",
+      "summary": "VSCode 1.99가 릴리스되며 사이드바 폭 조절 정밀도 개선, 새 단축키 12개 추가, 일부 테마 색상 미세 변경. 기능 변화는 점진적.",
+      "expected_importance": 2,
+      "rationale": "에디터 점진 개선 — 광범위하지만 임팩트 작음"
+    },
+    {
+      "id": "g11",
+      "title": "Docker Desktop 4.30 — 메모리 사용량 15% 절감 패치",
+      "summary": "Docker Desktop이 macOS·Windows 환경에서 idle 메모리 사용량을 15% 절감하는 4.30 패치를 배포. 기능 추가는 없고 성능 개선이 중심.",
+      "expected_importance": 2,
+      "rationale": "개발 도구 성능 마이너 개선 — 의사결정에 영향 거의 없음"
+    },
+    {
+      "id": "g12",
+      "title": "Notion AI에 차트 위젯 4종 추가",
+      "summary": "Notion이 워크스페이스 AI 기능에 막대·파이·라인·영역 차트 위젯 4종을 추가. 자연어 명령으로 차트 자동 생성 가능.",
+      "expected_importance": 2,
+      "rationale": "SaaS 점진 기능 추가 — 좁은 사용자층"
+    },
+    {
+      "id": "g13",
+      "title": "테크 CEO, 사내 카페테리아 새 메뉴 시식 사진 화제",
+      "summary": "유명 테크 기업 CEO가 사내 카페테리아에서 새 비건 메뉴를 시식하는 사진을 SNS에 올려 5만 리트윗. 사내 문화 화제로 확산.",
+      "expected_importance": 1,
+      "rationale": "단순 SNS 화제 — 의사결정·산업 영향 없음"
+    },
+    {
+      "id": "g14",
+      "title": "한 개발자의 키보드 컬렉션, 트위터에서 10만 좋아요",
+      "summary": "한 시니어 엔지니어가 자신의 30개 기계식 키보드 컬렉션 사진을 공유해 10만 좋아요. 커스텀 키캡 트렌드가 SNS에서 재조명.",
+      "expected_importance": 1,
+      "rationale": "개인 취미 화제 — 산업/실무 의사결정 무관"
+    },
+    {
+      "id": "g15",
+      "title": "AI 스타트업 사옥 인테리어 공개 — Pinterest 트렌드 영향",
+      "summary": "샌프란시스코 AI 스타트업이 새 사옥 인테리어를 공개. 모더니즘 가구와 식물 배치가 인테리어 매거진과 Pinterest에서 화제.",
+      "expected_importance": 1,
+      "rationale": "라이프스타일 기사 — 기술/산업 가치 없음"
+    },
+    {
+      "id": "g16",
+      "title": "FDA, 임상 진단에 LLM 사용 가이드라인 최종안 발표",
+      "summary": "미국 FDA가 의료 영상 판독·환자 분류에 사용되는 LLM 기반 진단 보조 도구의 승인 기준 최종안을 공개. 모든 의료 AI 벤더에 임상 검증 의무화.",
+      "expected_importance": 5,
+      "rationale": "헬스케어 AI 도입 전반에 규제 영향"
+    },
+    {
+      "id": "g17",
+      "title": "삼성전자, HBM4 대량 생산 시작 — AI 칩 공급망 재편",
+      "summary": "삼성전자가 HBM4 12단 적층 메모리의 양산 라인을 가동. SK하이닉스·마이크론과 경쟁이 본격화되며 엔비디아·AMD의 AI 가속기 공급 단가 변동 예상.",
+      "expected_importance": 5,
+      "rationale": "AI 인프라 핵심 부품 공급망 — 전 산업 영향"
+    },
+    {
+      "id": "g18",
+      "title": "Meta, Llama 4 오픈소스 공개 — 405B 파라미터 + 1M 컨텍스트",
+      "summary": "Meta가 Llama 4를 오픈웨이트로 공개. 405B 파라미터 dense 모델과 1M 토큰 컨텍스트를 지원하며 상업 사용도 허용. 클라우드 추론 파트너십도 동시 발표.",
+      "expected_importance": 5,
+      "rationale": "오픈소스 LLM 생태계 — 전 사업자 전략 재편 요소"
+    },
+    {
+      "id": "g19",
+      "title": "Microsoft, Azure OpenAI에서 GPT-4 Turbo 1M 토큰 컨텍스트 지원",
+      "summary": "Microsoft가 Azure OpenAI Service의 GPT-4 Turbo 모델에 1M 토큰 컨텍스트 옵션을 추가. 추가 요금 없이 모든 엔터프라이즈 구독자에게 제공.",
+      "expected_importance": 4,
+      "rationale": "엔터프라이즈 LLM 사용 패턴 — long-context 워크로드 광범위 확산"
+    },
+    {
+      "id": "g20",
+      "title": "Google, Gemini API 무료 사용자에 컨텍스트 캐싱 제공",
+      "summary": "Google이 Gemini API의 컨텍스트 캐싱 기능을 무료 티어 사용자에게도 개방. 동일 컨텍스트 재사용 시 비용·지연 모두 절감.",
+      "expected_importance": 4,
+      "rationale": "LLM 비용 구조 변화 — 개발자·스타트업 도입 가속"
+    },
+    {
+      "id": "g21",
+      "title": "Cursor IDE 2.0 출시 — 멀티 에이전트 모드와 워크플로 정의",
+      "summary": "Cursor가 2.0 메이저 업데이트를 공개. 여러 AI 에이전트가 협력하며 작업하는 모드와 사용자 정의 워크플로 DSL을 도입.",
+      "expected_importance": 4,
+      "rationale": "주력 AI 코딩 도구 — 개발자 생산성 광범위 영향"
+    },
+    {
+      "id": "g22",
+      "title": "Rust 1.85 출시 — 비동기 트레잇 안정화",
+      "summary": "Rust 1.85가 출시되며 async fn in trait이 정식 안정화. 시스템 프로그래밍에서 비동기 추상화가 표준 라이브러리 수준에서 가능해짐.",
+      "expected_importance": 3,
+      "rationale": "Rust 생태계 주요 마일스톤 — 다만 사용자 폭은 산업 일부"
+    },
+    {
+      "id": "g23",
+      "title": "Kubernetes 1.32 정식 릴리스 — sidecar 컨테이너 표준화",
+      "summary": "Kubernetes 1.32에서 sidecar 컨테이너가 GA(General Availability)로 승격. 로깅·프록시·서비스 메시 운영자에게 안정적 API 제공.",
+      "expected_importance": 3,
+      "rationale": "K8s 운영자에게 표준 패턴 안정화 — 실무자 영향"
+    },
+    {
+      "id": "g24",
+      "title": "Postman, OpenAPI 3.1 풀 호환 업데이트",
+      "summary": "Postman이 v11.5에서 OpenAPI 3.1 스펙을 완전 지원. JSON Schema 2020-12와 webhook 정의도 import·export 가능.",
+      "expected_importance": 3,
+      "rationale": "API 개발 도구 표준 호환 — 실무자 마이그레이션 필요"
+    },
+    {
+      "id": "g25",
+      "title": "PostgreSQL 17.2 마이너 패치 — 인덱스 빌드 버그 수정",
+      "summary": "PostgreSQL 17.2 패치가 배포되며 특정 GIN 인덱스 빌드 시 발생하던 메모리 누수 버그를 수정. 신규 기능 추가 없음.",
+      "expected_importance": 2,
+      "rationale": "마이너 패치 — DBA가 인지하면 충분"
+    },
+    {
+      "id": "g26",
+      "title": "Slack, 메시지 검색에 새 필터 옵션 3종 추가",
+      "summary": "Slack이 검색 UI에 '내가 멘션된 메시지', '파일 첨부 있음', '특정 채널 제외' 필터 3종을 추가. 검색 UX 점진 개선.",
+      "expected_importance": 2,
+      "rationale": "SaaS 점진 UX 개선 — 의사결정 영향 없음"
+    },
+    {
+      "id": "g27",
+      "title": "JetBrains IDE 코드 리뷰 패널, 다크 테마 색상 미세 조정",
+      "summary": "JetBrains IDE 2025.1.3 마이너에서 코드 리뷰 패널의 다크 테마 색상 대비를 미세 조정. 가독성 개선 외 기능 변화 없음.",
+      "expected_importance": 2,
+      "rationale": "테마 미세 조정 — 본질적 변화 없음"
+    },
+    {
+      "id": "g28",
+      "title": "AWS Lightsail 콘솔, 사이드바 UI 개편",
+      "summary": "AWS Lightsail의 관리 콘솔이 사이드바 메뉴 구조를 재배치하고 새 아이콘 세트를 적용. 기능 추가는 없음.",
+      "expected_importance": 2,
+      "rationale": "콘솔 UX 재배치 — 운영 패턴 변화 없음"
+    },
+    {
+      "id": "g29",
+      "title": "유명 개발자, 자신의 홈오피스 데스크 셋업 사진 공개",
+      "summary": "유명 오픈소스 메인테이너가 트리플 모니터·기계식 키보드·라이팅 셋업을 트위터에 공개. 'r/battlestations' 인기 게시물.",
+      "expected_importance": 1,
+      "rationale": "개인 라이프스타일 — 기술적 의미 없음"
+    },
+    {
+      "id": "g30",
+      "title": "테크 컨퍼런스 사은품 토트백 디자인, 디자이너들이 분석",
+      "summary": "한 글로벌 테크 컨퍼런스의 사은품 토트백이 미니멀 디자인으로 호평. 일러스트레이터들이 트위터에서 디자인 요소를 분석하며 화제.",
+      "expected_importance": 1,
+      "rationale": "사은품·디자인 화제 — 산업 의사결정 무관"
+    }
+  ]
+}
