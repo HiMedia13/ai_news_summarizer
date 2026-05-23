@@ -3,6 +3,7 @@
 실행: python evaluate_agent.py
 LangSmith UI에서 결과 확인: smith.langchain.com → Datasets & Experiments
 """
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -18,6 +19,8 @@ from app import react_agent
 
 if react_agent is None:
     raise SystemExit("OPENAI_API_KEY 미설정 - .env에 키를 추가하세요.")
+
+log = logging.getLogger(__name__)
 
 DATASET_NAME = "ai-news-agent-eval"
 
@@ -141,6 +144,7 @@ def quality_judge(outputs: dict, reference_outputs: dict, inputs: dict) -> dict:
         return {"key": "quality", "score": result.score / 5.0,
                 "comment": result.reason}
     except Exception as e:
+        log.exception("quality_judge 실패")
         return {"key": "quality", "score": 0.0,
                 "comment": f"(judge 파싱 실패: {e})"}
 
@@ -182,6 +186,7 @@ def _judge_json(prompt: str, key: str) -> dict:
         )
         return {"key": key, "score": result.score, "comment": result.reason}
     except Exception as e:
+        log.exception("_judge_json 실패 — key=%s", key)
         return {"key": key, "score": 0.0,
                 "comment": f"(judge 파싱 실패: {e})"}
 

@@ -289,6 +289,7 @@ def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
         ranked = [it for it, s in scored if s >= threshold]
         return ranked[:top_k]
     except Exception:
+        log.exception("rank_by_relevance 실패 — query=%r", q)
         return items[:top_k]
 
 

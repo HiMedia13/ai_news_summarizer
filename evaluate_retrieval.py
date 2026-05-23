@@ -10,6 +10,7 @@ LLM judge로 평가 (Ragas의 ContextRelevance 패턴과 동일한 구조).
   - docs/llm-evaluation/retrieval-report.md 에 상세 리포트 저장
 """
 import asyncio
+import logging
 import os
 import sys
 
@@ -21,6 +22,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 import app
+
+log = logging.getLogger(__name__)
 
 class RelevanceJudgment(BaseModel):
     """judge_chunk 응답 스키마."""
@@ -73,6 +76,7 @@ async def judge_chunk(judge_llm, query: str, chunk: str) -> int:
         ).ainvoke(messages)
         return int(bool(result.relevant))
     except Exception:
+        log.exception("judge_chunk 실패 — query=%r", query)
         return 0
 
 
