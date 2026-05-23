@@ -22,6 +22,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# exception 로그가 콘솔에 출력되도록 root logger 구성.
+# app.py가 같은 패턴으로 먼저 설정했으면 두 번째 호출은 no-op.
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
 from app import (  # noqa: E402
     DEFAULT_SOURCES, client, fetch_geeknews, reflective_news_agent,
     sort_for_display,
@@ -185,11 +193,6 @@ async def headlines_cmd(interaction: discord.Interaction,
 
 
 if __name__ == "__main__":
-    # exception 로그가 콘솔에 출력되도록 root logger 구성.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         raise SystemExit(

@@ -10,9 +10,7 @@ LLM judge로 평가 (Ragas의 ContextRelevance 패턴과 동일한 구조).
   - docs/llm-evaluation/retrieval-report.md 에 상세 리포트 저장
 """
 import asyncio
-import json
 import os
-import re
 import sys
 
 from dotenv import load_dotenv
@@ -20,8 +18,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
 import app
+
+class RelevanceJudgment(BaseModel):
+    """judge_chunk 응답 스키마."""
+
+    relevant: int = Field(ge=0, le=1, description="1=관련 있음, 0=무관")
+    reason: str = Field(default="", description="한 줄 사유")
+
 
 # 토픽 기반 쿼리 — 이전 큐레이션 데이터셋이 못 측정한 영역
 QUERIES = [
@@ -45,22 +51,27 @@ def _build_context(it: dict) -> str:
 
 async def judge_chunk(judge_llm, query: str, chunk: str) -> int:
     """LLM judge가 단일 chunk가 query와 관련 있는지 1(yes)/0(no) 응답."""
-    prompt = (
-        "당신은 검색 결과 관련성 평가관입니다. 주어진 검색어와 기사 텍스트를 보고 "
-        "기사가 검색어 주제와 직접 관련 있는지 판단하세요.\n\n"
-        f"[검색어]\n{query}\n\n"
-        f"[기사]\n{chunk[:600]}\n\n"
-        "관련성 기준:\n"
-        "- 기사가 검색어의 주제·키워드·도메인과 직접 연관되면 1\n"
-        "- 같은 분야이지만 검색어 주제와 거리가 있거나 우연한 단어 중첩이면 0\n\n"
-        '응답은 JSON만: {"relevant": 0 또는 1, "reason": "한 줄 사유"}'
-    )
-    resp = await judge_llm.ainvoke(prompt)
-    text = resp.content if isinstance(resp.content, str) else str(resp.content)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "당신은 검색 결과 관련성 평가관입니다. 주어진 검색어와 기사 텍스트를 보고 "
+                "기사가 검색어 주제와 직접 관련 있는지 판단하세요.\n\n"
+                "관련성 기준:\n"
+                "- 기사가 검색어의 주제·키워드·도메인과 직접 연관되면 relevant=1\n"
+                "- 같은 분야이지만 검색어 주제와 거리가 있거나 우연한 단어 중첩이면 relevant=0"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"[검색어]\n{query}\n\n[기사]\n{chunk[:600]}",
+        },
+    ]
     try:
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        data = json.loads(m.group(0))
-        return int(bool(data.get("relevant", 0)))
+        result: RelevanceJudgment = await judge_llm.with_structured_output(
+            RelevanceJudgment
+        ).ainvoke(messages)
+        return int(bool(result.relevant))
     except Exception:
         return 0
 

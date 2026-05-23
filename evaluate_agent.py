@@ -3,15 +3,14 @@
 실행: python evaluate_agent.py
 LangSmith UI에서 결과 확인: smith.langchain.com → Datasets & Experiments
 """
-import json
 import os
-import re
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 from langsmith import Client
 from langsmith.evaluation import evaluate
 
@@ -104,6 +103,18 @@ def run_agent(inputs: dict) -> dict:
     }
 
 
+class QualityRating(BaseModel):
+    """quality_judge 응답 스키마 (0~5 정수)."""
+    score: int = Field(ge=0, le=5, description="0~5 정수 점수")
+    reason: str = Field(default="", description="한 줄 평가")
+
+
+class JudgeRating(BaseModel):
+    """faithfulness/answer_relevancy/contextual_relevancy 응답 스키마 (0~1 실수)."""
+    score: float = Field(ge=0.0, le=1.0, description="0.0~1.0 실수 점수")
+    reason: str = Field(default="", description="한 줄 평가")
+
+
 JUDGE_MODEL = "gpt-4o"
 judge_llm = ChatOpenAI(model=JUDGE_MODEL, temperature=0)
 
@@ -122,17 +133,16 @@ def quality_judge(outputs: dict, reference_outputs: dict, inputs: dict) -> dict:
         "- 추측이나 환각 없이 검색 결과에 기반했는가?\n\n"
         '응답은 JSON만: {"score": 0~5 정수, "reason": "한 줄 평가"}'
     )
-    resp = judge_llm.invoke(prompt)
-    text = resp.content if isinstance(resp.content, str) else str(resp.content)
     try:
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        data = json.loads(m.group(0))
-        score = max(0, min(5, int(data.get("score", 0))))
-        return {"key": "quality", "score": score / 5.0,
-                "comment": data.get("reason", "")}
+        messages = [{"role": "user", "content": prompt}]
+        result: QualityRating = (
+            judge_llm.with_structured_output(QualityRating).invoke(messages)
+        )
+        return {"key": "quality", "score": result.score / 5.0,
+                "comment": result.reason}
     except Exception as e:
         return {"key": "quality", "score": 0.0,
-                "comment": f"(judge 파싱 실패: {e}) 원문: {text[:200]}"}
+                "comment": f"(judge 파싱 실패: {e})"}
 
 
 def tool_coverage(outputs: dict, reference_outputs: dict) -> dict:
@@ -164,18 +174,16 @@ def count_match(outputs: dict, reference_outputs: dict) -> dict:
 
 
 def _judge_json(prompt: str, key: str) -> dict:
-    """공통 헬퍼: judge LLM에 prompt 보내고 JSON {score, reason} 파싱."""
-    resp = judge_llm.invoke(prompt)
-    text = resp.content if isinstance(resp.content, str) else str(resp.content)
+    """공통 헬퍼: judge LLM에 prompt 보내고 0~1 점수 dict 반환."""
     try:
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        data = json.loads(m.group(0))
-        score = float(data.get("score", 0))
-        score = max(0.0, min(1.0, score))
-        return {"key": key, "score": score, "comment": data.get("reason", "")}
+        messages = [{"role": "user", "content": prompt}]
+        result: JudgeRating = (
+            judge_llm.with_structured_output(JudgeRating).invoke(messages)
+        )
+        return {"key": key, "score": result.score, "comment": result.reason}
     except Exception as e:
         return {"key": key, "score": 0.0,
-                "comment": f"(judge 파싱 실패: {e}) 원문: {text[:200]}"}
+                "comment": f"(judge 파싱 실패: {e})"}
 
 
 def faithfulness(outputs: dict, inputs: dict) -> dict:

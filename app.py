@@ -502,11 +502,7 @@ def _get_analysis_llm():
     return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=OPENAI_API_KEY)
 
 
-@traceable(
-    run_type="chain",
-    name="analyze_article",
-    metadata={"model": "gpt-4o-mini"},
-)
+@traceable(run_type="chain", name="analyze_article")
 def analyze(item):
     """OpenAI로 요약 + 중요도(1~5) + 한 줄 평가를 한 번에 받음."""
     text = item.get("summary", "")
