@@ -40,3 +40,6 @@ Thumbs.db
 
 # 로컬 문서 (LLM 평가 노트 등)
 docs/
+
+# project-reviewer 출력 (리뷰 리포트·스코프 메타데이터)
+.reviewer/

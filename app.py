@@ -3,6 +3,7 @@ AI 뉴스 크롤링 + OpenAI 요약 웹앱
 실행: python app.py  →  http://localhost:5000
 """
 import array
+import atexit
 import hashlib
 import json
 import logging
@@ -27,6 +28,7 @@ from flask import Flask, render_template, request
 import markdown as md_lib
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langsmith import traceable
@@ -80,8 +82,12 @@ RELEVANCE_THRESHOLD_RSS = 0.25    # RSS/비검색 소스(geeknews)
 # 같은 기사/쿼리가 다시 나오면 OpenAI 호출을 건너뛴다.
 # ---------------------------------------------------------------------------
 EMBED_CACHE_PATH = Path(os.getenv("EMBED_CACHE_PATH", ".cache/embeddings.sqlite"))
+EMBED_CACHE_TTL_DAYS = int(os.getenv("EMBED_CACHE_TTL_DAYS", "30"))  # 0 = 무제한
 _embed_db_lock = threading.Lock()
 _embed_db_ready = False
+
+_ANALYZE_EXECUTOR = ThreadPoolExecutor(max_workers=5, thread_name_prefix="analyze")
+atexit.register(_ANALYZE_EXECUTOR.shutdown, wait=False)
 
 
 def _embed_db_conn() -> sqlite3.Connection:
@@ -126,11 +132,19 @@ def _load_cached_embeddings(hashes: list[str], model: str) -> dict[str, list[flo
     conn = _embed_db_conn()
     try:
         placeholders = ",".join("?" * len(hashes))
-        rows = conn.execute(
-            f"SELECT text_hash, embedding FROM embedding_cache "
-            f"WHERE model = ? AND text_hash IN ({placeholders})",
-            [model, *hashes],
-        ).fetchall()
+        if EMBED_CACHE_TTL_DAYS > 0:
+            rows = conn.execute(
+                f"SELECT text_hash, embedding FROM embedding_cache "
+                f"WHERE model = ? AND text_hash IN ({placeholders})"
+                f" AND created_at >= unixepoch() - (? * 86400)",
+                [model, *hashes, EMBED_CACHE_TTL_DAYS],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT text_hash, embedding FROM embedding_cache "
+                f"WHERE model = ? AND text_hash IN ({placeholders})",
+                [model, *hashes],
+            ).fetchall()
         return {h: _blob_to_emb(b) for h, b in rows}
     finally:
         conn.close()
@@ -152,8 +166,7 @@ def _store_cached_embeddings(items: list[tuple[str, list[float]]], model: str) -
         conn.close()
 
 
-@traceable(run_type="embedding", name="embed_batch",
-           metadata={"model": EMBED_MODEL})
+@traceable(run_type="embedding", name="embed_batch")
 def embed_batch(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
     """텍스트 리스트 → 임베딩 리스트. 캐시에 있는 건 재사용, 없는 것만 OpenAI 호출."""
     if not texts or client is None:
@@ -250,8 +263,7 @@ def _resolve_queries(query: str, intent: str) -> tuple[str, str]:
     return _rewrite_query(query)
 
 
-@traceable(run_type="chain", name="rank_by_relevance",
-           metadata={"model": EMBED_MODEL})
+@traceable(run_type="chain", name="rank_by_relevance")
 def rank_by_relevance(query: str, items: list[dict], top_k: int = 10,
                       threshold: float | None = None) -> list[dict]:
     """OpenAI 임베딩으로 query와 각 item의 의미적 유사도를 계산해 상위 top_k 반환.
@@ -468,6 +480,28 @@ def fetch_naver_crawl(query="AI", limit=10, *,
 EMPTY_ANALYSIS = {"summary": "", "importance": 0, "evaluation": ""}
 
 
+class AnalyzeResult(BaseModel):
+    """analyze() 응답 스키마."""
+    summary: str = Field(description="핵심을 2~3문장으로 요약")
+    importance: int = Field(ge=1, le=5, description="1~5 중요도 점수")
+    evaluation: str = Field(description="점수 이유를 40자 이내로 설명")
+
+
+class CritiqueResult(BaseModel):
+    """critique_results() 응답 스키마."""
+    score: int = Field(ge=1, le=5, description="1~5 품질 점수")
+    reason: str = Field(default="", description="한 줄 이유")
+    suggest_query: str = Field(default="", description="더 나은 검색어, 없으면 빈 문자열")
+
+
+@lru_cache(maxsize=1)
+def _get_analysis_llm():
+    """분석/critic용 ChatOpenAI. OPENAI_API_KEY 없으면 None."""
+    if not OPENAI_API_KEY:
+        return None
+    return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=OPENAI_API_KEY)
+
+
 @traceable(
     run_type="chain",
     name="analyze_article",
@@ -479,36 +513,26 @@ def analyze(item):
     title = item.get("title", "")
     if not text or item.get("link") == "#":
         return dict(EMPTY_ANALYSIS)
-    if client is None:
+    if _get_analysis_llm() is None:
         return {"summary": "(OPENAI_API_KEY 미설정 - .env에 키를 추가하세요)",
                 "importance": 0, "evaluation": ""}
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system",
-                 "content": (
-                     "당신은 한국어 뉴스 분석 전문가입니다. 주어진 뉴스를 분석해 JSON으로 응답하세요.\n"
-                     "필드:\n"
-                     '- "summary": 핵심을 2~3문장으로 요약 (추측/부연 금지)\n'
-                     '- "importance": 1~5 정수 점수. 1=가십·단순 동향, 3=업계 관심사, 5=산업/사회에 큰 영향\n'
-                     '- "evaluation": 그 점수를 매긴 이유를 한 줄(40자 이내)로 설명'
-                 )},
-                {"role": "user", "content": f"제목: {title}\n\n내용: {text}"},
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=400,
-            temperature=0.3,
-        )
-        data = json.loads(resp.choices[0].message.content)
-        try:
-            importance = max(0, min(5, int(data.get("importance", 0))))
-        except (TypeError, ValueError):
-            importance = 0
+        llm = _get_analysis_llm().bind(temperature=0.3).with_structured_output(AnalyzeResult)
+        result: AnalyzeResult = llm.invoke([
+            {"role": "system",
+             "content": (
+                 "당신은 한국어 뉴스 분석 전문가입니다. 주어진 뉴스를 분석해 JSON으로 응답하세요.\n"
+                 "필드:\n"
+                 '- "summary": 핵심을 2~3문장으로 요약 (추측/부연 금지)\n'
+                 '- "importance": 1~5 정수 점수. 1=가십·단순 동향, 3=업계 관심사, 5=산업/사회에 큰 영향\n'
+                 '- "evaluation": 그 점수를 매긴 이유를 한 줄(40자 이내)로 설명'
+             )},
+            {"role": "user", "content": f"제목: {title}\n\n내용: {text}"},
+        ])
         return {
-            "summary": (data.get("summary") or "").strip(),
-            "importance": importance,
-            "evaluation": (data.get("evaluation") or "").strip(),
+            "summary": result.summary.strip(),
+            "importance": result.importance,
+            "evaluation": result.evaluation.strip(),
         }
     except Exception:
         log.exception("analyze 실패 — title=%r", title)
@@ -563,13 +587,12 @@ def expand_sources(sources: list[str]) -> list[str]:
     return expanded
 
 
-@traceable(run_type="chain", name="critique_results",
-           metadata={"model": "gpt-4o-mini"})
+@traceable(run_type="chain", name="critique_results")
 def critique_results(query: str, top_picks: list[dict],
                      analyzed: list[dict]) -> dict:
     """검색·분석 결과가 사용자 질문에 충분한지 1~5점으로 채점.
-    반환: {score, reason, suggest_query}. client가 없거나 호출 실패 시 통과 처리."""
-    if client is None:
+    반환: {score, reason, suggest_query}. LLM이 없거나 호출 실패 시 통과 처리."""
+    if _get_analysis_llm() is None:
         return {"score": 5, "reason": "", "suggest_query": ""}
     real = [a for a in (analyzed or [])
             if a.get("link") and a.get("link") != "#"]
@@ -581,29 +604,23 @@ def critique_results(query: str, top_picks: list[dict],
         for a in (top_picks or real[:5])
     )
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "당신은 검색 결과 품질 평가관입니다. 사용자 질문과 "
-                    "검색·분석된 기사 목록을 보고 결과가 질문에 답하기에 "
-                    "충분한지 1~5점으로 채점하세요.\n"
-                    "1=거의 무관, 3=부분 충분, 5=매우 적합. JSON만 응답:\n"
-                    '{"score": 1~5 정수, "reason": "한 줄 이유", '
-                    '"suggest_query": "더 나은 검색어 또는 빈 문자열"}'
-                )},
-                {"role": "user",
-                 "content": f"[질문]\n{query}\n\n[기사 목록]\n{bullets}"},
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=200,
-            temperature=0,
-        )
-        data = json.loads(resp.choices[0].message.content)
+        llm = _get_analysis_llm().with_structured_output(CritiqueResult)
+        result: CritiqueResult = llm.invoke([
+            {"role": "system", "content": (
+                "당신은 검색 결과 품질 평가관입니다. 사용자 질문과 "
+                "검색·분석된 기사 목록을 보고 결과가 질문에 답하기에 "
+                "충분한지 1~5점으로 채점하세요.\n"
+                "1=거의 무관, 3=부분 충분, 5=매우 적합. JSON만 응답:\n"
+                '{"score": 1~5 정수, "reason": "한 줄 이유", '
+                '"suggest_query": "더 나은 검색어 또는 빈 문자열"}'
+            )},
+            {"role": "user",
+             "content": f"[질문]\n{query}\n\n[기사 목록]\n{bullets}"},
+        ])
         return {
-            "score": max(1, min(5, int(data.get("score", 3)))),
-            "reason": (data.get("reason") or "").strip(),
-            "suggest_query": (data.get("suggest_query") or "").strip(),
+            "score": result.score,
+            "reason": result.reason.strip(),
+            "suggest_query": result.suggest_query.strip(),
         }
     except Exception:
         log.exception("critique_results 실패")
@@ -677,8 +694,7 @@ def enrich_node(state: NewsState):
         return {"analyzed": []}
     if not state.get("do_summarize"):
         return {"analyzed": [_merge_analysis(it, None) for it in items]}
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        results = list(ex.map(analyze, items))
+    results = list(_ANALYZE_EXECUTOR.map(analyze, items))
     return {"analyzed": [_merge_analysis(it, r) for it, r in zip(items, results)]}
 
 
