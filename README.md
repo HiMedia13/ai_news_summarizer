@@ -1,8 +1,24 @@
-# AI 뉴스 큐레이션
+# AI 뉴스 큐레이션 — Self-RAG News Agent
 
-학습용 RAG 프로젝트 — **Flask 웹** + **Discord 봇** + **LangGraph 에이전트**.
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-000000?style=flat-square&logo=flask&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![LangSmith](https://img.shields.io/badge/LangSmith-1C3C3C?style=flat-square&logo=langchain&logoColor=white)
+
+RAG 학습 프로젝트 — **Flask 웹** + **Discord 봇** + **LangGraph 에이전트**.
 멀티 소스에서 뉴스를 끌어와 OpenAI 임베딩으로 재랭킹하고, gpt-4o-mini로 분석·브리핑한 뒤,
 critic LLM이 결과 품질을 채점해 부족하면 한 번 더 검색하는 **Self-RAG** 패턴을 구현합니다.
+
+## 🎯 이 프로젝트로 보여주는 역량
+
+- **Self-RAG 파이프라인** — critic LLM이 결과를 1~5점으로 채점하고, 미달 시 쿼리 재작성 + 소스 확장 후 재검색 (`reflective_news_agent`)
+- **ReAct 에이전트** — LLM이 도구 호출을 스스로 판단하는 파이프라인을 LangGraph `create_react_agent`로 구현 (`/agent`)
+- **검색 품질 튜닝** — OpenAI 임베딩 + 코사인 유사도 + **소스별 threshold**를 retrieval 평가 결과에 근거해 분리 설정
+- **비용·성능 최적화** — `(text_hash, model)` 키의 **SQLite 임베딩 캐시**로 중복 OpenAI 호출 제거, LangGraph로 멀티 소스 **병렬 fetch**
+- **LLM-as-judge 평가** — retrieval precision과 ReAct trace를 LLM으로 정량 평가하는 스크립트 내장 (`evaluate_retrieval.py`, `evaluate_agent.py`)
+- **관측성 / 멀티 인터페이스** — LangSmith 트레이싱(`@traceable`) 연동, 웹과 Discord 슬래시 커맨드 동시 지원
 
 ```
 검색어
