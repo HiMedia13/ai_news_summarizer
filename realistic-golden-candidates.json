@@ -1,0 +1,318 @@
+{
+  "version": 1,
+  "purpose": "휴리스틱 stratification으로 실기사에서 추출한 후보. 사용자 라벨링이 정석이나 1차 측정용으로 Claude(opus-4-7)가 임시 라벨링. 의견 일치도 측정 용도이며 '실제 정확도' 의미는 아님. 사용자가 검토·수정 권장.",
+  "labeled_by": "claude-opus-4-7 (임시 — 사용자 검토 필요)",
+  "collected_at": "2026-05-23T17:33:57",
+  "rubric_reference": "importance-golden.json (의 rubric을 그대로 적용)",
+  "buckets": [
+    "announcement",
+    "update",
+    "market",
+    "gossip",
+    "regulation",
+    "other"
+  ],
+  "target_per_bucket": 5,
+  "items": [
+    {
+      "id": "r01",
+      "source": "GeekNews",
+      "bucket": "announcement",
+      "title": "Show GN: 오프라인 영상 자막 추출 및 번역 데스크톱 앱 v2.0 (오픈소스)",
+      "summary": "외국어 영상 볼 때 자막이 없어서 답답했던 적 많으시죠?\nWhisperSubTranslate v2.0을 공개합니다. 영상 파일 하나 던져넣으면 whisper.cpp로 음성을 추출하고, 번역 엔진이 선택한 언어로 SRT 자막을 만들어주는 데스크톱 앱입니다.\n특징:\n\n100% 로컬에서 동작 (클라우드 업로드 없음, 계",
+      "link": "https://news.hada.io/topic?id=29788",
+      "expected_importance": 2,
+      "rationale": "개인 프로젝트 오픈소스 v2.0 — 좁은 사용자층, hobby 도구"
+    },
+    {
+      "id": "r02",
+      "source": "GeekNews",
+      "bucket": "announcement",
+      "title": "Bun 지원이 이제 제한되고 폐기 예정으로 전환됨",
+      "summary": "\n이 이슈는 아직 Open 상태이며, 다음 yt-dlp 및/또는 ejs 릴리스부터 Bun 지원 범위를 1.2.11 이상 1.3.14 이하로 제한하고 지원 자체도 폐기 예정으로 전환함\nyt-dlp는 Bun을 ejs",
+      "link": "https://news.hada.io/topic?id=29786",
+      "expected_importance": 2,
+      "rationale": "특정 라이브러리(yt-dlp/ejs)의 Bun 런타임 호환성 폐기 — 좁은 호환 이슈"
+    },
+    {
+      "id": "r03",
+      "source": "GeekNews",
+      "bucket": "announcement",
+      "title": "5년과 500만 달러의 교훈: 웹 개발용 새 프로그래밍 언어를 만든 것은 실수였다 | Wasp",
+      "summary": "\nY Combinator 출신 풀스택 웹 프레임워크 Wasp가 5년간 자체 DSL 기반 언어 개발을 시도한 끝에 이를 포기하고 TypeScript로 전환하는 결정을 공개\n\"JS판 Rails/Laravel\"을 지향하며 React·Node.js·Prisma 위에서 앱 사양을 선언적으로 기술하는 구조로 ...",
+      "link": "https://news.hada.io/topic?id=29778",
+      "expected_importance": 3,
+      "rationale": "프레임워크 빌더에게 큰 교훈 회고 글 — 실무자 관심사·전략 인사이트"
+    },
+    {
+      "id": "r04",
+      "source": "GeekNews",
+      "bucket": "announcement",
+      "title": "LLM 아키텍처의 최근 동향: KV 공유, mHC, 그리고 압축 어텐션",
+      "summary": "\n최근 공개된 오픈 웨이트 LLM들이 장문 컨텍스트 효율성에 집중하면서, KV 캐시 크기·메모리 트래픽·어텐션 비용을 줄이기 위한 아키텍처 트릭이 빠르게 늘어나는 중\nGemma 4는 계층 간 KV 공유(cross-layer attention) 와 per-layer emb...",
+      "link": "https://news.hada.io/topic?id=29775",
+      "expected_importance": 3,
+      "rationale": "LLM 엔지니어·연구자에게 직접 가치 — 실무 기술 동향 정리"
+    },
+    {
+      "id": "r05",
+      "source": "GeekNews",
+      "bucket": "announcement",
+      "title": "Seattle Shield, Seattle 경찰이 운영하는 정보 공유 네트워크",
+      "summary": "\nSeattle Shield는 SPD가 2009년부터 운영해 온 정보 공유 네트워크로, Facebook, Amazon, ICE와 민간 보안·법집행 기관이 회원으로 참여함\n공개기록의 2020년 회원 명단과 2020~2025년 보고서에는 군 정보 요원, 비영리단체, 민간 기업이 포함됐고, 2025년 보고서는 주로 시...",
+      "link": "https://news.hada.io/topic?id=29763",
+      "expected_importance": 3,
+      "rationale": "빅테크 + 법집행 감시 인프라 — 사생활·법적 관심사"
+    },
+    {
+      "id": "r06",
+      "source": "TechCrunch AI",
+      "bucket": "update",
+      "title": "You can no longer Google the word 'disregard'",
+      "summary": "After Google Search's AI update, the word \"disregard\" now effectively breaks the search interface.",
+      "link": "https://techcrunch.com/2026/05/22/you-can-no-longer-google-the-word-disregard/",
+      "expected_importance": 2,
+      "rationale": "Google AI 검색 부작용 — 흥미로운 버그지만 영향 범위 좁음"
+    },
+    {
+      "id": "r07",
+      "source": "GeekNews",
+      "bucket": "market",
+      "title": "메모리 부족으로 인해 소비자 가전 제품의 가격이 재조정되고 있음",
+      "summary": "\nAI 데이터센터가 DRAM 공급을 흡수하면서, 더 싸고 강력해지던 소비자 전자제품의 장기 흐름이 흔들리고 있음\nDRAM은 프로세서보다 개선 속도가 느린 memory wall 병목이며, 선단 공장 증설에는 150억~200억 달러와 수년이 필요함\nSamsung, SK Hynix, Mic...",
+      "link": "https://news.hada.io/topic?id=29769",
+      "expected_importance": 4,
+      "rationale": "AI 데이터센터가 일반 소비자 가전 가격에 직접 영향 — 산업 광범위"
+    },
+    {
+      "id": "r08",
+      "source": "GeekNews",
+      "bucket": "market",
+      "title": "2021년 MacBook에서 Gemma4-31B로 1년치 영상을 로컬 색인하기(50GB 스왑)",
+      "summary": "\n영상 아카이브의 병목은 편집 도구보다 검색 불가능성이었고, 라벨 없는 클립을 영어로 질의 가능한 인덱스로 바꾸는 데 초점을 맞춤\n로컬 우선 설계로 각 클립 옆에 .description.md 사이드카 파일을 만들고, rating·조명·위치·전사·키워드·산문 설...",
+      "link": "https://news.hada.io/topic?id=29764",
+      "expected_importance": 2,
+      "rationale": "개인 hobby 프로젝트 — 좁은 사용 사례"
+    },
+    {
+      "id": "r09",
+      "source": "TechCrunch AI",
+      "bucket": "market",
+      "title": "Elon Musk can't hear you over the sound of his $1.75 trillion IPO",
+      "summary": "The SpaceX S-1 is finally here, and the story it tells goes way further than rockets. The filing runs to 36 pages of risk factors alone, and the numbers inside match the ambition: a $28 trillion total addressable market, a pay package tied to establishing a Mars colony, and a valuation target that would make it the largest IPO in American […]",
+      "link": "https://techcrunch.com/podcast/elon-musk-cant-hear-you-over-the-sound-of-his-1-75-trillion-ipo/",
+      "expected_importance": 4,
+      "rationale": "$1.75T 미국 사상 최대 IPO — 시장 광범위 영향. AI 산업 직접은 아니지만 광범위 임팩트"
+    },
+    {
+      "id": "r10",
+      "source": "TechCrunch AI",
+      "bucket": "market",
+      "title": "SpaceX files to go public, and the math requires a little faith",
+      "summary": "The SpaceX S-1 is finally here, and the story it tells goes way further than rockets. The filing runs to 36 pages of risk factors alone, and the numbers inside match the ambition: a $28 trillion total addressable market, a pay package tied to establishing a Mars colony, and a valuation target that would make it the largest IPO in American […]",
+      "link": "https://techcrunch.com/video/spacex-files-to-go-public-and-the-math-requires-a-little-faith/",
+      "expected_importance": 4,
+      "rationale": "r09와 동일한 SpaceX IPO 기사 (반복 노출)"
+    },
+    {
+      "id": "r11",
+      "source": "TechCrunch AI",
+      "bucket": "market",
+      "title": "With aluminum prices up 20%, recycling startups bet on AI to cash in",
+      "summary": "Recycling startups are using AI to improve the recovery of critical minerals like aluminum, aiming to build a massive source of the metal.",
+      "link": "https://techcrunch.com/2026/05/21/with-aluminum-prices-up-20-recycling-startups-bet-on-ai-to-cash-in/",
+      "expected_importance": 3,
+      "rationale": "소재 시장 + AI 응용 스타트업 — 좁은 시장 관심사"
+    },
+    {
+      "id": "r12",
+      "source": "GeekNews",
+      "bucket": "gossip",
+      "title": "미래를 위한 Firefox 디자인",
+      "summary": "\nFirefox의 새 디자인 Project Nova는 기존 브라우저를 대체하지 않고, 더 일관되고 깔끔한 기반으로 Firefox를 정비하는 작업임\n개인정보 보호 기능을 더 앞에 배치해 내장 무료 VPN, 사생활 보호 브라우징, 데이터 선택, AI 기능 끄기를 찾기 쉽게 만듦\n...",
+      "link": "https://news.hada.io/topic?id=29789",
+      "expected_importance": 3,
+      "rationale": "메이저 브라우저 디자인 개편 — 광범위 사용자 영향 (실 사용자 폭이 좁아 3)"
+    },
+    {
+      "id": "r13",
+      "source": "GeekNews",
+      "bucket": "gossip",
+      "title": "Vivaldi 8.0: 사상 최대 디자인 개편 - 웹 브라우저",
+      "summary": "\nUnified 디자인이 도입되어 탭, 도구 모음, 패널, 콘텐츠의 경계를 줄이고 브라우저 전체를 하나의 연속된 프레임으로 구성함\n모든 도구 모음이 단일 표면 위에 놓이며, 테마 색상과 배경이 탭 바부터 패널과 가장자리까지 더 일관되게 이어짐\n배경화면은 더 이상 일부 영역...",
+      "link": "https://news.hada.io/topic?id=29772",
+      "expected_importance": 2,
+      "rationale": "소수 사용자 브라우저 메이저 디자인 개편 — 좁은 사용자 영향"
+    },
+    {
+      "id": "r14",
+      "source": "GeekNews",
+      "bucket": "other",
+      "title": "리걸 프롬프트에서 Boolean이 중요한 이유",
+      "summary": "리걸 프롬프트에서 Boolean은 단순한 검색 연산자가 아니라 법률 AI의 판단 구조를 통제하는 핵심 장치다. AND는 모든 필수 요건을 빠짐없이 검토하게 하고, OR는 선택적 요건을 과도하게 요구하지 않게 하며, NOT은 예외·면책·배제 사유를 놓치지 않게 한다. 또한 IF-THEN-ELSE 구조는 사실관계나 증거가 부족한 경우...",
+      "link": "https://news.hada.io/topic?id=29787",
+      "expected_importance": 2,
+      "rationale": "프롬프트 엔지니어링 도메인 가이드 — 좁은 응용 분야"
+    },
+    {
+      "id": "r15",
+      "source": "GeekNews",
+      "bucket": "other",
+      "title": "AI로 시장조사할 때 프롬프트에 넣어야 할 제약 조건 4가지",
+      "summary": "AI 시장조사 활용 시 신뢰도 검증의 중요성\nAI로 시장조사 업무를 빠르게 처리할 수 있는 시대가 됐지만, AI가 생성한 데이터의 정확성 검증은 필수\n실제 경험에 기반한 AI의 4가지 주요 오류 유형과 이를 방지하기 위한 프롬프트 제약 방법 소개\n주요 AI 리서치 오류 유형\n• Case 1: 그",
+      "link": "https://news.hada.io/topic?id=29785",
+      "expected_importance": 2,
+      "rationale": "사용자 가이드/팁 글 — 좁은 응용 분야"
+    },
+    {
+      "id": "r16",
+      "source": "GeekNews",
+      "bucket": "other",
+      "title": "macOS의 기능을 100% 활용하는 실시간 다국어 AI Voice Agent — TalkMode",
+      "summary": "제목:\n맥 위에서 동작하는 실시간 AI 음성 Agent — TalkMode\n부제:\n시선 추적(Gaze), 실시간 STT/TTS, Claude/OpenAI 연동 기반의 Agent-OS 스타일 음성 인터페이스\nTalkMode 는 단순 음성 챗봇보다는\n“실시간 작업형 AI 음성 Agent”에",
+      "link": "https://news.hada.io/topic?id=29784",
+      "expected_importance": 2,
+      "rationale": "개인/소규모 음성 에이전트 데스크탑 앱 — 좁은 사용자층"
+    },
+    {
+      "id": "r17",
+      "source": "GeekNews",
+      "bucket": "other",
+      "title": "일본 기업은 왜 그렇게 다양한 일을 많이 하는가",
+      "summary": "\nToto는 변기·비데 회사로 알려졌지만 정전척 성장으로 AI 반도체 공급망의 핵심 공급자가 됐고, 일본식 다각화의 전형을 보여줌\n일본 기업의 특이점은 단순한 사업 확장이 아니라 세라믹, 광학, 소재, 장비 같은 고정밀 투입재를 여러 영역에서 잘 만든다는 데 있음...",
+      "link": "https://news.hada.io/topic?id=29783",
+      "expected_importance": 2,
+      "rationale": "산업 분석 에세이 — 흥미는 있으나 의사결정 영향 작음"
+    },
+    {
+      "id": "r18",
+      "source": "GeekNews",
+      "bucket": "other",
+      "title": "Steve Wozniak, 학생들에게 AI, 즉 actual intelligence가 있다고 말한 뒤 박수 받음",
+      "summary": "\nSteve Wozniak은 Grand Valley State University 졸업식에서 AI를 농담처럼 풀어내며 웃음과 박수를 받음\n노동시장에 들어가는 졸업생들에게 “여러분은 AI, 즉 actual intelligence를 가지고 있다”고 말함\nAI를 깊게 다루려면 시간이 오래 걸린다며 인류...",
+      "link": "https://news.hada.io/topic?id=29782",
+      "expected_importance": 1,
+      "rationale": "유명 인사 졸업식 화제 — 의사결정 무관 가십"
+    },
+    {
+      "id": "r19",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "LLM이라면, 이것을 읽어 주세요",
+      "summary": "\nAnna's Archive는 인류의 지식과 문화를 백업하고 전 세계 누구나 접근할 수 있게 하려는 비영리 프로젝트임\n웹사이트에는 과부하 방지를 위한 CAPTCHA가 있지만, 전체 데이터는 토렌트와 JSON API로 대량 다운로드 가능함\nHTML과 코드는 GitLab...",
+      "link": "https://news.hada.io/topic?id=29781",
+      "expected_importance": 2,
+      "rationale": "비영리 디지털 도서관의 LLM 학습 데이터 호소 — 흥미로운 입장이나 영향 좁음"
+    },
+    {
+      "id": "r20",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "Zero - 에이전트를 위한 프로그래밍 언어",
+      "summary": "\nVercel Labs에서 에이전트가 주 사용자가 되는 환경을 가정해 처음부터 다시 설계된 실험적 프로그래밍 언어\n즉석에서 배울 수 있고, Inspect·Repair가 결정적이며, 표준 라이브러리 우선, 대부분의 작업에 명백한 한 경로가 있을 만큼 명시적인 언어",
+      "link": "https://news.hada.io/topic?id=29780",
+      "expected_importance": 3,
+      "rationale": "Vercel Labs 실험적 언어 — 실무자·연구자 관심사"
+    },
+    {
+      "id": "r21",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "SSH에서 REST로: 보안 중심의 Slack EMR 데이터 파이프라인 현대화",
+      "summary": "\nSlack 데이터 플랫폼에는 700개 이상의 SSH 기반 Operator가 일일 검색 인덱싱, 분석 작업 등 핵심 데이터 파이프라인을 운영, 모든 작업이 프로덕션 AWS EMR 클러스터에 직접 SSH 접속을 요구해 광범위한 보안 위협 표면 형성\n이 SSH 의존성은 보안 위험뿐 아니라...",
+      "link": "https://news.hada.io/topic?id=29779",
+      "expected_importance": 3,
+      "rationale": "Slack 엔지니어링 회고 — 데이터 플랫폼 실무자 관심사"
+    },
+    {
+      "id": "r22",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "웹사이트 작성을 위한 Forth에서 영감을 받은 언어",
+      "summary": "\nForge는 웹사이트를 스택 기반 언어로 작성해보는 실험적 언어로, HTML 태그를 Forth 스타일 단어로 정의해 사용함\n단어 라이브러리로 HTML에 microformats를 붙이기 쉽게 만들며, 사이트는 페이지·라이브러리·스타일시트로 구성됨\n단일 바이너리가 ",
+      "link": "https://news.hada.io/topic?id=29777",
+      "expected_importance": 1,
+      "rationale": "취미용 실험 언어 — 의사결정 무관, 라이프스타일 hobby"
+    },
+    {
+      "id": "r23",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "C 프로그래밍 언어 퀴즈",
+      "summary": "\nC 언어 규칙은 포인터 비교, 별칭, 널 포인터, 초기화되지 않은 값처럼 단순해 보이는 코드도 정의되지 않은 동작으로 만들 수 있음\n정수 상수와 sizeof, 문자 상수, uint8_t 산술은 타입 선택과 정수 승격 때문에 플랫폼·표기·중간 대...",
+      "link": "https://news.hada.io/topic?id=29776",
+      "expected_importance": 1,
+      "rationale": "교육 자료/퀴즈 글 — 화제성 컨텐츠"
+    },
+    {
+      "id": "r24",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "Gnutella: 자신을 만든 세계보다 오래 살아남은 프로토콜",
+      "summary": "\nGnutella는 잊힌 파일 공유 프로토콜에 가깝지만, 탈중앙 기술을 의식하지 않은 수백만 사용자가 MP3 다운로드 문제를 해결한 실제 사례였음\n2000~2001년 미국 인터넷 보급률 50%, 저렴해진 MP3 플레이어, 스트리밍 한계, 직접 파일 관리 문화가 채택을 밀어줌",
+      "link": "https://news.hada.io/topic?id=29774",
+      "expected_importance": 1,
+      "rationale": "역사 회고 에세이 — 의사결정 무관"
+    },
+    {
+      "id": "r25",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "Waymo, 로보택시가 계속 침수 지역으로 진입하자 애틀랜타 서비스 중단",
+      "summary": "\nWaymo 로보택시가 폭우와 침수 도로에 대응하지 못해 애틀랜타, San Antonio, Dallas, Houston에서 서비스가 중단됨\n애틀랜타에서는 탑승자가 없는 차량이 침수 도로를 지나가다 약 1시간 멈췄고, 이후 회수되어 현장에서 제거됨\nWaymo는 Texas 전역의 악...",
+      "link": "https://news.hada.io/topic?id=29773",
+      "expected_importance": 3,
+      "rationale": "자율주행 안전성 운영 이슈 — 실무자·규제 관심사"
+    },
+    {
+      "id": "r26",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "AI를 거부하는 것은 인간의 선택이다",
+      "summary": "\nAI 거부는 뒤처짐의 문제가 아니라, 기업과 억만장자가 밀어붙이는 기술 도입에서 개인과 사회의 선택권을 되찾는 문제임\nBuzzfeed의 Jonah Peretti는 President of Buzzfeed AI로 옮기며 AI가 회사를 회복시킬 것이라 했지만, 구체적 근거는 제시하지 않음\n...",
+      "link": "https://news.hada.io/topic?id=29771",
+      "expected_importance": 1,
+      "rationale": "AI 비평 의견 칼럼 — 화제성 컨텐츠"
+    },
+    {
+      "id": "r27",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "쇠퇴하는 미국",
+      "summary": "\nTim Bray는 존중하는 조직의 AI 중심 unconference 초대를 받았지만, 장소가 미국이라는 이유로 거절함\n모임은 과도한 AI 낙관론 행사가 아니었고, 지적인 논의와 회의적 참여도 가능해 보였음\n캐나다인으로서 캐나다 주권을 반복적으로...",
+      "link": "https://news.hada.io/topic?id=29770",
+      "expected_importance": 1,
+      "rationale": "유명 엔지니어 정치 의견 글 — 가십에 가까운 화제"
+    },
+    {
+      "id": "r28",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "1945년 Trinity 핵실험의 잃어버린 이미지가 복원됨",
+      "summary": "\nTrinity 핵실험은 1945년 7월 16일 New Mexico 사막에서 인류가 처음 핵의 힘을 방출한 순간이었음\nEmily Seyl의 책은 20년에 걸친 복원 작업으로 되살린 Manhattan Project 사진 수백 장을 담고 있음\nBerlyn Brixner의 Mitchell 카메라 2대는 폭발 영상을...",
+      "link": "https://news.hada.io/topic?id=29768",
+      "expected_importance": 1,
+      "rationale": "역사 사진 복원 — 기술 산업과 무관"
+    },
+    {
+      "id": "r29",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "Python 3.15: 헤드라인을 장식하지 못한 기능들",
+      "summary": "\nPython 3.15.0b1 기능 동결로 지연 임포트와 Tachyon 프로파일러 외에도 실용적인 개선들이 확정됨\nasyncio의 TaskGroup.cancel() 은 사용자 정의 예외와 contextlib.suppress 없이 태스크 그룹을 우아하게 취소함\nCon...",
+      "link": "https://news.hada.io/topic?id=29767",
+      "expected_importance": 2,
+      "rationale": "Python 3.15 부속 기능 정리 — 점진 개선"
+    },
+    {
+      "id": "r30",
+      "source": "GeekNews",
+      "bucket": "other (backfill)",
+      "title": "Show GN: Marksmith - VS Code/Windsurf용 마크다운 생산성 확장",
+      "summary": "VS Code와 Windsurf에서 마크다운 작성 시 발생하는 잔작업을 줄이기 위해 만든 확장 프로그램\n클립보드 컨텍스트 인식, 양방향 프리뷰, 문서 분석 기능을 하나의 패키지로 통합\nWindsurf는 VS Code 포크 기반이므로 동일 API로 양쪽 모두 지원\n\n만든 이유\n웹/Word에서 복사한",
+      "link": "https://news.hada.io/topic?id=29766",
+      "expected_importance": 1,
+      "rationale": "개인 IDE 확장 Show GN — hobby 프로젝트"
+    }
+  ]
+}
