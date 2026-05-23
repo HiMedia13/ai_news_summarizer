@@ -439,6 +439,38 @@ def _parse_naver_legacy(soup: BeautifulSoup, fetch_pool: int) -> list[dict]:
     return items
 
 
+# 네이버 뉴스 기사 URL 패턴 — n.news.naver.com 또는 외부 언론사 도메인.
+# 클래스명 의존 없이 링크 자체를 식별하므로 페이지 개편에 회복력 있음.
+_NAVER_ARTICLE_HREF_RE = re.compile(
+    r"^https?://(?:n\.)?news\.naver\.com/(?:article|mnews)/", re.IGNORECASE,
+)
+
+
+def _parse_naver_generic(soup: BeautifulSoup, fetch_pool: int) -> list[dict]:
+    """SDS/레거시 셀렉터가 모두 실패할 때의 최종 폴백.
+    클래스명 대신 기사 URL 패턴으로 anchor를 식별 — 페이지 구조가 바뀌어도
+    뉴스 기사 링크 형식은 유지되므로 다음 개편까지 시간 벌이용."""
+    items: list[dict] = []
+    seen_links: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if not _NAVER_ARTICLE_HREF_RE.match(href):
+            continue
+        if href in seen_links:
+            continue
+        title = a.get("title") or a.get_text(" ", strip=True)
+        if not title or len(title) < 5:  # 빈 링크 / 아이콘 anchor 제외
+            continue
+        seen_links.add(href)
+        items.append({
+            "title": title, "link": href, "summary": "",
+            "published": "", "source": "네이버 뉴스 크롤링",
+        })
+        if len(items) >= fetch_pool:
+            break
+    return items
+
+
 @traceable(run_type="retriever", name="fetch_naver_crawl")
 def fetch_naver_crawl(query="AI", limit=10, *,
                       intent: str = "", threshold: float | None = None):
@@ -461,16 +493,30 @@ def fetch_naver_crawl(query="AI", limit=10, *,
     try:
         r = requests.get(url, headers=UA, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        # 새 구조 (2025~): sds-comps 디자인 시스템. 헤드라인은 span.headline1,
-        # 부모 <a>가 링크. 기사 컨테이너는 headline span을 1개만 포함하는 최소 ancestor.
+        # 3단계 폴백: 구체적 셀렉터 → 레거시 → URL 패턴 기반 일반 파서.
+        # 네이버 페이지가 또 개편되어도 마지막 단계는 살아남도록 설계.
         items = _parse_naver_sds(soup, fetch_pool)
+        used = "sds" if items else None
         if not items:
             items = _parse_naver_legacy(soup, fetch_pool)
+            used = "legacy" if items else used
+        if not items:
+            items = _parse_naver_generic(soup, fetch_pool)
+            used = "generic" if items else used
 
         if not items:
+            log.warning(
+                "fetch_naver_crawl: 3개 파서 모두 빈 결과 — query=%r. "
+                "네이버 페이지 구조가 크게 변경됐을 가능성 — 셀렉터 갱신 필요.", query,
+            )
             return [{"title": "(크롤링 결과 없음 - 네이버 페이지 구조 변경 가능성)",
                      "link": "#", "summary": "", "published": "",
                      "source": "네이버 뉴스 크롤링", "ai_summary": ""}]
+        if used == "generic":
+            log.info(
+                "fetch_naver_crawl: generic 파서로만 결과 확보 — "
+                "SDS/legacy 셀렉터가 깨졌을 가능성, 갱신 권장.",
+            )
         return rank_by_relevance(semantic_q, items, top_k=limit, threshold=threshold)
     except Exception:
         log.exception("fetch_naver_crawl 실패 — query=%r", query)
